@@ -9,9 +9,11 @@ preset = input.string("Auto", "Preset", options=["Auto", "Gold", "Nifty", "Custo
 
 grpTrend = "Trend"
 htf        = input.timeframe("60", "Higher timeframe", group=grpTrend)
+htfEmaLen  = input.int(50, "HTF EMA", minval=5, group=grpTrend, tooltip="Use 50, not 200. Gold 60m EMA200 stays bull for months and would hide every SELL.")
 emaFastLen = input.int(21, "Fast EMA", minval=2, group=grpTrend)
 emaSlowLen = input.int(55, "Slow EMA", minval=2, group=grpTrend)
-emaBiasLen = input.int(200, "Bias EMA", minval=50, group=grpTrend)
+emaBiasLen = input.int(200, "Chart bias EMA", minval=50, group=grpTrend)
+tradeMode  = input.string("Pullback OK", "Signal mode", options=["Pullback OK", "HTF must agree"], group=grpTrend, tooltip="Pullback OK: SELL can print when local EMA+ST+MACD agree even if HTF 50 is still bull. Never BUY while local EMAs are bear.")
 
 grpSt = "Supertrend"
 stAtrLen = input.int(10, "ATR length", minval=1, group=grpSt)
@@ -47,12 +49,13 @@ grpUi = "Display"
 showRibbon   = input.bool(true, "EMA ribbon", group=grpUi)
 showSt       = input.bool(true, "Supertrend (split, no vertical jump)", group=grpUi)
 showBg       = input.bool(true, "Tint only when HTF and local agree", group=grpUi)
+showSetups   = input.bool(true, "Show small WAIT triangles (armed, no entry yet)", group=grpUi)
 cooldownBars = input.int(8, "Min bars between signals", minval=1, group=grpUi)
 
 // ── Instrument auto-detect ──────────────────────────────────────────────────
 tkr = str.upper(syminfo.ticker + " " + syminfo.tickerid)
 isNifty = str.contains(tkr, "NIFTY") or str.contains(tkr, "BANKNIFTY") or str.contains(tkr, "FINNIFTY")
-isGold  = str.contains(tkr, "XAU") or str.contains(tkr, "GOLD") or str.contains(tkr, "XAUUSD")
+isGold  = str.contains(tkr, "XAU") or str.contains(tkr, "GOLD") or str.contains(tkr, "XAUUSD") or str.contains(tkr, "GC1") or str.contains(tkr, "GC2") or str.contains(tkr, "MGC")
 
 useNifty = preset == "Nifty" or (preset == "Auto" and isNifty)
 useGold  = preset == "Gold" or (preset == "Auto" and isGold and not isNifty)
@@ -83,30 +86,34 @@ volOk = atr > ta.sma(atr, 50) * atrMinMult
 adxOk = adx >= adxMinEff
 
 htfClose = request.security(syminfo.tickerid, htf, close, barmerge.gaps_off, barmerge.lookahead_off)
-htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, emaBiasLen), barmerge.gaps_off, barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, htfEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
 htfBull  = htfClose > htfEma
 htfBear  = htfClose < htfEma
 
-localBull = close > emaBias and close > emaSlow and emaFast > emaSlow
-localBear = close < emaBias and close < emaSlow and emaFast < emaSlow
+localBull = close > emaSlow and emaFast > emaSlow
+localBear = close < emaSlow and emaFast < emaSlow
 
 macdBull = macdHist > 0 and macdHist > macdHist[1]
 macdBear = macdHist < 0 and macdHist < macdHist[1]
 rsiBuyOk  = rsi >= rsiBuyMin and rsi <= rsiBuyMax
 rsiSellOk = rsi >= rsiSellMin and rsi <= rsiSellMax
 
-conflict = (htfBull and localBear) or (htfBear and localBull) or (htfBull and stBear) or (htfBear and stBull)
-alignedBuy  = htfBull and localBull and stBull
-alignedSell = htfBear and localBear and stBear
+strictHtf = tradeMode == "HTF must agree"
+conflict  = (htfBull and localBear) or (htfBear and localBull)
+alignedBuy  = localBull and stBull and (not strictHtf or htfBull) and not localBear
+alignedSell = localBear and stBear and (not strictHtf or htfBear)
 
-// Trigger: reclaim / reject of fast EMA, or confirmed Supertrend flip. No chase after a dump.
-dumpBar = close < open and (high - close) > atr * 0.6
+dumpBar  = close < open and (high - close) > atr * 0.6
 rallyBar = close > open and (close - low) > atr * 0.6
-buyTrigger  = (ta.crossover(close, emaFast) or (stBull and not (stDir[1] < 0))) and not dumpBar
-sellTrigger = (ta.crossunder(close, emaFast) or (stBear and not (stDir[1] > 0))) and not rallyBar
 
-buyRaw  = inSess and volOk and adxOk and alignedBuy and not conflict and macdBull and rsiBuyOk and diPlus > diMinus and buyTrigger
-sellRaw = inSess and volOk and adxOk and alignedSell and not conflict and macdBear and rsiSellOk and diMinus > diPlus and sellTrigger
+buyArm  = inSess and volOk and adxOk and alignedBuy and macdBull and rsiBuyOk and diPlus > diMinus
+sellArm = inSess and volOk and adxOk and alignedSell and macdBear and rsiSellOk and diMinus > diPlus
+
+buyTrigger  = (ta.crossover(close, emaFast) or (stBull and not (stDir[1] < 0)) or (buyArm and not buyArm[1])) and not dumpBar
+sellTrigger = (ta.crossunder(close, emaFast) or (stBear and not (stDir[1] > 0)) or (sellArm and not sellArm[1])) and not rallyBar
+
+buyRaw  = buyArm and buyTrigger and (not strictHtf or not conflict)
+sellRaw = sellArm and sellTrigger
 
 var int lastSigBar = na
 coolOk = na(lastSigBar) or (bar_index - lastSigBar >= cooldownBars)
@@ -119,9 +126,9 @@ if buySignal or sellSignal
 buyScore = (htfBull ? 1 : 0) + (localBull ? 1 : 0) + (stBull ? 1 : 0) + (macdBull ? 1 : 0) + (rsiBuyOk ? 1 : 0) + (adxOk ? 1 : 0) + (volOk ? 1 : 0) + (inSess ? 1 : 0)
 sellScore = (htfBear ? 1 : 0) + (localBear ? 1 : 0) + (stBear ? 1 : 0) + (macdBear ? 1 : 0) + (rsiSellOk ? 1 : 0) + (adxOk ? 1 : 0) + (volOk ? 1 : 0) + (inSess ? 1 : 0)
 
-verdict = buySignal ? "BUY" : sellSignal ? "SELL" : conflict ? "CONFLICT — NO TRADE" : alignedBuy ? "WAIT BUY SETUP" : alignedSell ? "WAIT SELL SETUP" : not adxOk ? "NO TRADE (ADX)" : not inSess ? "OUT OF SESSION" : "NO TRADE"
+verdict = buySignal ? "BUY" : sellSignal ? "SELL" : sellArm ? "WAIT SELL (armed)" : buyArm ? "WAIT BUY (armed)" : conflict ? "HTF vs local (info)" : not adxOk ? "NO TRADE (ADX)" : not inSess ? "OUT OF SESSION" : "NO TRADE"
 
-blockWhy = not inSess ? "session" : not adxOk ? "ADX " + str.tostring(adx, "#.0") + " < " + str.tostring(adxMinEff, "#.0") : conflict ? "HTF vs price conflict" : not volOk ? "dead ATR" : alignedBuy and not buyTrigger ? "no BUY trigger" : alignedSell and not sellTrigger ? "no SELL trigger" : "filters"
+blockWhy = buySignal or sellSignal ? "signal bar" : not inSess ? "session" : not adxOk ? "ADX " + str.tostring(adx, "#.0") + " < " + str.tostring(adxMinEff, "#.0") : sellArm and not sellTrigger ? "need SELL trigger (EMA cross or ST flip)" : buyArm and not buyTrigger ? "need BUY trigger (EMA cross or ST flip)" : conflict ? "HTF 50 vs local EMAs differ" : "filters not aligned"
 
 // ── Plots ───────────────────────────────────────────────────────────────────
 colFast = color.new(#26a69a, 0)
@@ -139,6 +146,8 @@ bgcolor(bgTint, title="Agreement tint")
 
 plotshape(buySignal, "BUY", shape.labelup, location.belowbar, color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.small)
 plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.small)
+plotshape(showSetups and buyArm and not buySignal, "BUY armed", shape.triangleup, location.belowbar, color.new(#69f0ae, 30), size=size.tiny)
+plotshape(showSetups and sellArm and not sellSignal, "SELL armed", shape.triangledown, location.abovebar, color.new(#ff8a80, 30), size=size.tiny)
 
 buySl = close - atr * slAtr
 buyTp1 = close + atr * tp1Atr
@@ -171,7 +180,7 @@ passCol(ok) =>
 
 if barstate.islast
     table.cell(dash, 0, 0, modeName, text_color=color.white, text_size=size.normal)
-    table.cell(dash, 1, 0, verdict, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : conflict ? color.new(#ffd54f, 0) : color.silver, text_size=size.small)
+    table.cell(dash, 1, 0, verdict, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : (buyArm or sellArm) ? color.new(#80d8ff, 0) : conflict ? color.new(#ffd54f, 0) : color.silver, text_size=size.small)
     table.cell(dash, 0, 1, "Why", text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 1, blockWhy, text_color=color.silver, text_size=size.small)
     table.cell(dash, 0, 2, "Score B/S", text_color=color.gray, text_size=size.small)
