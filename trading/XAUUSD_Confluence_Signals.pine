@@ -1,0 +1,165 @@
+//@version=5
+// XAUUSD Confluence Signals
+// Non-repainting: signals fire on confirmed bar close only.
+// This is a technical tool, not financial advice. Gold can gap and spike; always use stops.
+indicator("XAUUSD Confluence Signals", overlay=true, max_labels_count=500, max_lines_count=500, explicit_plot_zorder=true)
+
+// ── Inputs ──────────────────────────────────────────────────────────────────
+grpTrend = "Trend"
+htf          = input.timeframe("60", "Higher timeframe bias", group=grpTrend, tooltip="Use 60 on M5/M15, 240 on M15/H1.")
+emaFastLen   = input.int(21, "Fast EMA", minval=2, group=grpTrend)
+emaSlowLen   = input.int(55, "Slow EMA", minval=2, group=grpTrend)
+emaBiasLen   = input.int(200, "Bias EMA", minval=50, group=grpTrend)
+
+grpSt = "Supertrend"
+stAtrLen     = input.int(10, "ATR length", minval=1, group=grpSt)
+stFactor     = input.float(3.0, "Factor", minval=0.5, step=0.1, group=grpSt)
+
+grpMom = "Momentum"
+rsiLen       = input.int(14, "RSI length", minval=2, group=grpMom)
+rsiBuyMin    = input.int(48, "RSI min for BUY", minval=1, maxval=70, group=grpMom)
+rsiBuyMax    = input.int(68, "RSI max for BUY", minval=50, maxval=90, group=grpMom)
+rsiSellMin   = input.int(32, "RSI min for SELL", minval=10, maxval=50, group=grpMom)
+rsiSellMax   = input.int(52, "RSI max for SELL", minval=30, maxval=99, group=grpMom)
+macdFast     = input.int(12, "MACD fast", minval=2, group=grpMom)
+macdSlow     = input.int(26, "MACD slow", minval=2, group=grpMom)
+macdSig      = input.int(9, "MACD signal", minval=2, group=grpMom)
+
+grpVol = "Volatility / ADX"
+adxLen       = input.int(14, "ADX length", minval=2, group=grpVol)
+adxMin       = input.float(18.0, "Min ADX (trend strength)", minval=1, step=0.5, group=grpVol)
+atrLen       = input.int(14, "ATR length", minval=1, group=grpVol)
+atrMinMult   = input.float(0.35, "Min ATR vs SMA(ATR) (skip dead market)", minval=0.05, step=0.05, group=grpVol)
+
+grpSess = "Sessions (exchange time of the chart)"
+useSession   = input.bool(true, "Only signal in session", group=grpSess)
+sessWindow   = input.session("0700-1700", "Active window", group=grpSess, tooltip="London + New York gold hours on a UTC chart. Adjust if your exchange timezone differs.")
+
+grpRisk = "Stop / target (visual + alerts)"
+slAtr        = input.float(1.5, "Stop ATR multiple", minval=0.5, step=0.1, group=grpRisk)
+tp1Atr       = input.float(2.0, "TP1 ATR multiple", minval=0.5, step=0.1, group=grpRisk)
+tp2Atr       = input.float(3.5, "TP2 ATR multiple", minval=0.5, step=0.1, group=grpRisk)
+showLevels   = input.bool(true, "Draw SL / TP on signal bar", group=grpRisk)
+
+grpUi = "Display"
+showRibbon   = input.bool(true, "EMA ribbon", group=grpUi)
+showSt       = input.bool(true, "Supertrend", group=grpUi)
+showBg       = input.bool(true, "Tint HTF bias", group=grpUi)
+cooldownBars = input.int(8, "Min bars between signals", minval=1, group=grpUi)
+
+// ── Series ──────────────────────────────────────────────────────────────────
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+emaBias = ta.ema(close, emaBiasLen)
+
+[stLine, stDir] = ta.supertrend(stFactor, stAtrLen)  // stDir: -1 bull, +1 bear
+stBull = stDir < 0
+stBear = stDir > 0
+
+rsi = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+
+atr = ta.atr(atrLen)
+atrSma = ta.sma(atr, 50)
+volOk = atr > atrSma * atrMinMult
+
+inSess = not useSession or not na(time(timeframe.period, sessWindow))
+
+// Higher-timeframe bias (no lookahead → no HTF repaint)
+htfClose = request.security(syminfo.tickerid, htf, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, emaBiasLen), barmerge.gaps_off, barmerge.lookahead_off)
+htfBull  = htfClose > htfEma
+htfBear  = htfClose < htfEma
+
+localBull = close > emaBias and emaFast > emaSlow
+localBear = close < emaBias and emaFast < emaSlow
+
+macdBull = macdHist > 0 and macdHist > macdHist[1]
+macdBear = macdHist < 0 and macdHist < macdHist[1]
+
+rsiBuyOk  = rsi >= rsiBuyMin and rsi <= rsiBuyMax
+rsiSellOk = rsi >= rsiSellMin and rsi <= rsiSellMax
+
+// Pullback trigger: reclaim of fast EMA in the direction of trend (avoids chasing)
+buyTrigger  = ta.crossover(close, emaFast) or (stBull and stBear[1])
+sellTrigger = ta.crossunder(close, emaFast) or (stBear and stBull[1])
+
+adxOk = adx >= adxMin
+
+buyRaw = inSess and volOk and adxOk and htfBull and localBull and stBull and macdBull and rsiBuyOk and diPlus > diMinus and buyTrigger
+sellRaw = inSess and volOk and adxOk and htfBear and localBear and stBear and macdBear and rsiSellOk and diMinus > diPlus and sellTrigger
+
+// Confirmed bar only + cooldown (prevents intra-bar flicker and signal spam)
+var int lastSigBar = na
+coolOk = na(lastSigBar) or (bar_index - lastSigBar >= cooldownBars)
+
+buySignal  = barstate.isconfirmed and buyRaw and coolOk
+sellSignal = barstate.isconfirmed and sellRaw and coolOk and not buySignal
+
+if buySignal or sellSignal
+    lastSigBar := bar_index
+
+// ── Plots ───────────────────────────────────────────────────────────────────
+colFast = color.new(#26a69a, 0)
+colSlow = color.new(#42a5f5, 0)
+colBias = color.new(#ab47bc, 35)
+pFast = plot(showRibbon ? emaFast : na, "EMA fast", colFast, 2)
+pSlow = plot(showRibbon ? emaSlow : na, "EMA slow", colSlow, 2)
+plot(showRibbon ? emaBias : na, "EMA bias", colBias, 2)
+fill(pFast, pSlow, color=emaFast > emaSlow ? color.new(#26a69a, 88) : color.new(#ef5350, 88))
+
+stCol = stBull ? color.new(#00e676, 0) : color.new(#ff5252, 0)
+plot(showSt ? stLine : na, "Supertrend", stCol, 2, plot.style_linebr)
+
+bgcolor(showBg ? (htfBull ? color.new(#00e676, 94) : color.new(#ff5252, 94)) : na, title="HTF bias")
+
+plotshape(buySignal, title="BUY", style=shape.labelup, location=location.belowbar, color=color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.small)
+plotshape(sellSignal, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.small)
+
+// Risk levels on the signal bar
+buySl  = close - atr * slAtr
+buyTp1 = close + atr * tp1Atr
+buyTp2 = close + atr * tp2Atr
+sellSl  = close + atr * slAtr
+sellTp1 = close - atr * tp1Atr
+sellTp2 = close - atr * tp2Atr
+
+if showLevels and buySignal
+    line.new(bar_index, buySl, bar_index + 12, buySl, color=color.new(#ff5252, 0), width=1, style=line.style_dotted)
+    line.new(bar_index, buyTp1, bar_index + 12, buyTp1, color=color.new(#69f0ae, 0), width=1, style=line.style_dotted)
+    line.new(bar_index, buyTp2, bar_index + 12, buyTp2, color=color.new(#00e676, 0), width=2, style=line.style_dotted)
+    label.new(bar_index, buySl, "SL " + str.tostring(buySl, format.mintick), style=label.style_label_up, color=color.new(#ff5252, 20), textcolor=color.white, size=size.tiny)
+if showLevels and sellSignal
+    line.new(bar_index, sellSl, bar_index + 12, sellSl, color=color.new(#ff5252, 0), width=1, style=line.style_dotted)
+    line.new(bar_index, sellTp1, bar_index + 12, sellTp1, color=color.new(#69f0ae, 0), width=1, style=line.style_dotted)
+    line.new(bar_index, sellTp2, bar_index + 12, sellTp2, color=color.new(#00e676, 0), width=2, style=line.style_dotted)
+    label.new(bar_index, sellSl, "SL " + str.tostring(sellSl, format.mintick), style=label.style_label_down, color=color.new(#ff5252, 20), textcolor=color.white, size=size.tiny)
+
+// Dashboard
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(#0d1117, 12), border_width=1, border_color=color.new(#37474f, 0))
+f_cell(row, title, ok) =>
+    table.cell(dash, 0, row, title, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, row, ok ? "ON" : "OFF", text_color=ok ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
+
+if barstate.islast
+    table.cell(dash, 0, 0, "XAUUSD", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 0, htfBull ? "HTF BUY BIAS" : "HTF SELL BIAS", text_color=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
+    f_cell(1, "Session", inSess)
+    f_cell(2, "Volatility", volOk)
+    f_cell(3, "ADX", adxOk)
+    f_cell(4, "Supertrend", stBull)
+    f_cell(5, "MACD", macdBull)
+    table.cell(dash, 0, 6, "RSI", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(rsi, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 7, "ADX", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, str.tostring(adx, "#.0"), text_color=color.white, text_size=size.small)
+
+// Alerts (create in TradingView: Alert → this indicator → condition)
+alertcondition(buySignal, title="XAUUSD BUY", message="XAUUSD CONFLUENCE BUY | {{ticker}} {{interval}} close={{close}}")
+alertcondition(sellSignal, title="XAUUSD SELL", message="XAUUSD CONFLUENCE SELL | {{ticker}} {{interval}} close={{close}}")
+
+if buySignal
+    alert("XAUUSD BUY  SL=" + str.tostring(buySl, format.mintick) + " TP1=" + str.tostring(buyTp1, format.mintick) + " TP2=" + str.tostring(buyTp2, format.mintick), alert.freq_once_per_bar_close)
+if sellSignal
+    alert("XAUUSD SELL SL=" + str.tostring(sellSl, format.mintick) + " TP1=" + str.tostring(sellTp1, format.mintick) + " TP2=" + str.tostring(sellTp2, format.mintick), alert.freq_once_per_bar_close)
