@@ -1,127 +1,149 @@
 //@version=5
-// XAUUSD Confluence Signals
-// Non-repainting: signals fire on confirmed bar close only.
-// This is a technical tool, not financial advice. Gold can gap and spike; always use stops.
-indicator("XAUUSD Confluence Signals", overlay=true, max_labels_count=500, max_lines_count=500, explicit_plot_zorder=true)
+// Confluence Signals v2 — XAUUSD / Nifty (non-repainting, bar-close only)
+// Not financial advice. Do not take HTF bias as an entry.
+indicator("Confluence Signals v2", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
+grpInst = "Instrument"
+preset = input.string("Auto", "Preset", options=["Auto", "Gold", "Nifty", "Custom"], group=grpInst, tooltip="Auto: Gold session for XAU/GOLD, Nifty cash hours for NIFTY/BANKNIFTY. Do not run the Gold preset on Nifty.")
+
 grpTrend = "Trend"
-htf          = input.timeframe("60", "Higher timeframe bias", group=grpTrend, tooltip="Use 60 on M5/M15, 240 on M15/H1.")
-emaFastLen   = input.int(21, "Fast EMA", minval=2, group=grpTrend)
-emaSlowLen   = input.int(55, "Slow EMA", minval=2, group=grpTrend)
-emaBiasLen   = input.int(200, "Bias EMA", minval=50, group=grpTrend)
+htf        = input.timeframe("60", "Higher timeframe", group=grpTrend)
+emaFastLen = input.int(21, "Fast EMA", minval=2, group=grpTrend)
+emaSlowLen = input.int(55, "Slow EMA", minval=2, group=grpTrend)
+emaBiasLen = input.int(200, "Bias EMA", minval=50, group=grpTrend)
 
 grpSt = "Supertrend"
-stAtrLen     = input.int(10, "ATR length", minval=1, group=grpSt)
-stFactor     = input.float(3.0, "Factor", minval=0.5, step=0.1, group=grpSt)
+stAtrLen = input.int(10, "ATR length", minval=1, group=grpSt)
+stFactor = input.float(3.0, "Factor (use 2.2 on Nifty 5m)", minval=0.5, step=0.1, group=grpSt)
 
 grpMom = "Momentum"
-rsiLen       = input.int(14, "RSI length", minval=2, group=grpMom)
-rsiBuyMin    = input.int(48, "RSI min for BUY", minval=1, maxval=70, group=grpMom)
-rsiBuyMax    = input.int(68, "RSI max for BUY", minval=50, maxval=90, group=grpMom)
-rsiSellMin   = input.int(32, "RSI min for SELL", minval=10, maxval=50, group=grpMom)
-rsiSellMax   = input.int(52, "RSI max for SELL", minval=30, maxval=99, group=grpMom)
-macdFast     = input.int(12, "MACD fast", minval=2, group=grpMom)
-macdSlow     = input.int(26, "MACD slow", minval=2, group=grpMom)
-macdSig      = input.int(9, "MACD signal", minval=2, group=grpMom)
+rsiLen     = input.int(14, "RSI length", minval=2, group=grpMom)
+rsiBuyMin  = input.int(48, "RSI min BUY", minval=1, maxval=70, group=grpMom)
+rsiBuyMax  = input.int(68, "RSI max BUY", minval=50, maxval=90, group=grpMom)
+rsiSellMin = input.int(32, "RSI min SELL", minval=10, maxval=50, group=grpMom)
+rsiSellMax = input.int(52, "RSI max SELL", minval=30, maxval=99, group=grpMom)
+macdFast   = input.int(12, "MACD fast", minval=2, group=grpMom)
+macdSlow   = input.int(26, "MACD slow", minval=2, group=grpMom)
+macdSig    = input.int(9, "MACD signal", minval=2, group=grpMom)
 
 grpVol = "Volatility / ADX"
-adxLen       = input.int(14, "ADX length", minval=2, group=grpVol)
-adxMin       = input.float(18.0, "Min ADX (trend strength)", minval=1, step=0.5, group=grpVol)
-atrLen       = input.int(14, "ATR length", minval=1, group=grpVol)
-atrMinMult   = input.float(0.35, "Min ATR vs SMA(ATR) (skip dead market)", minval=0.05, step=0.05, group=grpVol)
+adxLen     = input.int(14, "ADX length", minval=2, group=grpVol)
+adxMin     = input.float(18.0, "Min ADX", minval=1, step=0.5, group=grpVol)
+atrLen     = input.int(14, "ATR length", minval=1, group=grpVol)
+atrMinMult = input.float(0.35, "Min ATR vs SMA(ATR)", minval=0.05, step=0.05, group=grpVol)
 
-grpSess = "Sessions (exchange time of the chart)"
-useSession   = input.bool(true, "Only signal in session", group=grpSess)
-sessWindow   = input.session("0700-1700", "Active window", group=grpSess, tooltip="London + New York gold hours on a UTC chart. Adjust if your exchange timezone differs.")
+grpSess = "Session"
+useSession = input.bool(true, "Only signal in session", group=grpSess)
+customSess = input.session("0700-1700", "Custom session (Custom preset)", group=grpSess)
 
-grpRisk = "Stop / target (visual + alerts)"
-slAtr        = input.float(1.5, "Stop ATR multiple", minval=0.5, step=0.1, group=grpRisk)
-tp1Atr       = input.float(2.0, "TP1 ATR multiple", minval=0.5, step=0.1, group=grpRisk)
-tp2Atr       = input.float(3.5, "TP2 ATR multiple", minval=0.5, step=0.1, group=grpRisk)
-showLevels   = input.bool(true, "Draw SL / TP on signal bar", group=grpRisk)
+grpRisk = "Stop / target"
+slAtr      = input.float(1.5, "Stop ATR", minval=0.5, step=0.1, group=grpRisk)
+tp1Atr     = input.float(2.0, "TP1 ATR", minval=0.5, step=0.1, group=grpRisk)
+tp2Atr     = input.float(3.5, "TP2 ATR", minval=0.5, step=0.1, group=grpRisk)
+showLevels = input.bool(true, "Draw SL / TP on signal", group=grpRisk)
 
 grpUi = "Display"
 showRibbon   = input.bool(true, "EMA ribbon", group=grpUi)
-showSt       = input.bool(true, "Supertrend", group=grpUi)
-showBg       = input.bool(true, "Tint HTF bias", group=grpUi)
+showSt       = input.bool(true, "Supertrend (split, no vertical jump)", group=grpUi)
+showBg       = input.bool(true, "Tint only when HTF and local agree", group=grpUi)
 cooldownBars = input.int(8, "Min bars between signals", minval=1, group=grpUi)
+
+// ── Instrument auto-detect ──────────────────────────────────────────────────
+tkr = str.upper(syminfo.ticker + " " + syminfo.tickerid)
+isNifty = str.contains(tkr, "NIFTY") or str.contains(tkr, "BANKNIFTY") or str.contains(tkr, "FINNIFTY")
+isGold  = str.contains(tkr, "XAU") or str.contains(tkr, "GOLD") or str.contains(tkr, "XAUUSD")
+
+useNifty = preset == "Nifty" or (preset == "Auto" and isNifty)
+useGold  = preset == "Gold" or (preset == "Auto" and isGold and not isNifty)
+
+sessStr = preset == "Custom" ? customSess : useNifty ? "0915-1530" : "0700-1700"
+inSess  = not useSession or not na(time(timeframe.period, sessStr))
+
+stFactorEff = (preset == "Auto" and useNifty) ? 2.2 : stFactor
+adxMinEff   = (preset == "Auto" and useNifty) ? 20.0 : adxMin
+
+modeName = useNifty ? "NIFTY" : useGold ? "XAUUSD" : str.upper(syminfo.ticker)
 
 // ── Series ──────────────────────────────────────────────────────────────────
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 emaBias = ta.ema(close, emaBiasLen)
 
-[stLine, stDir] = ta.supertrend(stFactor, stAtrLen)  // stDir: -1 bull, +1 bear
-stBull = stDir < 0
-stBear = stDir > 0
+[stLine, stDir] = ta.supertrend(stFactorEff, stAtrLen)
+stBull = stDir < 0 and close > stLine
+stBear = stDir > 0 and close < stLine
 
 rsi = ta.rsi(close, rsiLen)
 [macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
 [diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
 
 atr = ta.atr(atrLen)
-atrSma = ta.sma(atr, 50)
-volOk = atr > atrSma * atrMinMult
+volOk = atr > ta.sma(atr, 50) * atrMinMult
+adxOk = adx >= adxMinEff
 
-inSess = not useSession or not na(time(timeframe.period, sessWindow))
-
-// Higher-timeframe bias (no lookahead → no HTF repaint)
 htfClose = request.security(syminfo.tickerid, htf, close, barmerge.gaps_off, barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, emaBiasLen), barmerge.gaps_off, barmerge.lookahead_off)
 htfBull  = htfClose > htfEma
 htfBear  = htfClose < htfEma
 
-localBull = close > emaBias and emaFast > emaSlow
-localBear = close < emaBias and emaFast < emaSlow
+localBull = close > emaBias and close > emaSlow and emaFast > emaSlow
+localBear = close < emaBias and close < emaSlow and emaFast < emaSlow
 
 macdBull = macdHist > 0 and macdHist > macdHist[1]
 macdBear = macdHist < 0 and macdHist < macdHist[1]
-
 rsiBuyOk  = rsi >= rsiBuyMin and rsi <= rsiBuyMax
 rsiSellOk = rsi >= rsiSellMin and rsi <= rsiSellMax
 
-// Pullback trigger: reclaim of fast EMA in the direction of trend (avoids chasing)
-buyTrigger  = ta.crossover(close, emaFast) or (stBull and stBear[1])
-sellTrigger = ta.crossunder(close, emaFast) or (stBear and stBull[1])
+conflict = (htfBull and localBear) or (htfBear and localBull) or (htfBull and stBear) or (htfBear and stBull)
+alignedBuy  = htfBull and localBull and stBull
+alignedSell = htfBear and localBear and stBear
 
-adxOk = adx >= adxMin
+// Trigger: reclaim / reject of fast EMA, or confirmed Supertrend flip. No chase after a dump.
+dumpBar = close < open and (high - close) > atr * 0.6
+rallyBar = close > open and (close - low) > atr * 0.6
+buyTrigger  = (ta.crossover(close, emaFast) or (stBull and not (stDir[1] < 0))) and not dumpBar
+sellTrigger = (ta.crossunder(close, emaFast) or (stBear and not (stDir[1] > 0))) and not rallyBar
 
-buyRaw = inSess and volOk and adxOk and htfBull and localBull and stBull and macdBull and rsiBuyOk and diPlus > diMinus and buyTrigger
-sellRaw = inSess and volOk and adxOk and htfBear and localBear and stBear and macdBear and rsiSellOk and diMinus > diPlus and sellTrigger
+buyRaw  = inSess and volOk and adxOk and alignedBuy and not conflict and macdBull and rsiBuyOk and diPlus > diMinus and buyTrigger
+sellRaw = inSess and volOk and adxOk and alignedSell and not conflict and macdBear and rsiSellOk and diMinus > diPlus and sellTrigger
 
-// Confirmed bar only + cooldown (prevents intra-bar flicker and signal spam)
 var int lastSigBar = na
 coolOk = na(lastSigBar) or (bar_index - lastSigBar >= cooldownBars)
-
 buySignal  = barstate.isconfirmed and buyRaw and coolOk
 sellSignal = barstate.isconfirmed and sellRaw and coolOk and not buySignal
-
 if buySignal or sellSignal
     lastSigBar := bar_index
+
+// Score (dashboard)
+buyScore = (htfBull ? 1 : 0) + (localBull ? 1 : 0) + (stBull ? 1 : 0) + (macdBull ? 1 : 0) + (rsiBuyOk ? 1 : 0) + (adxOk ? 1 : 0) + (volOk ? 1 : 0) + (inSess ? 1 : 0)
+sellScore = (htfBear ? 1 : 0) + (localBear ? 1 : 0) + (stBear ? 1 : 0) + (macdBear ? 1 : 0) + (rsiSellOk ? 1 : 0) + (adxOk ? 1 : 0) + (volOk ? 1 : 0) + (inSess ? 1 : 0)
+
+verdict = buySignal ? "BUY" : sellSignal ? "SELL" : conflict ? "CONFLICT — NO TRADE" : alignedBuy ? "WAIT BUY SETUP" : alignedSell ? "WAIT SELL SETUP" : not adxOk ? "NO TRADE (ADX)" : not inSess ? "OUT OF SESSION" : "NO TRADE"
+
+blockWhy = not inSess ? "session" : not adxOk ? "ADX " + str.tostring(adx, "#.0") + " < " + str.tostring(adxMinEff, "#.0") : conflict ? "HTF vs price conflict" : not volOk ? "dead ATR" : alignedBuy and not buyTrigger ? "no BUY trigger" : alignedSell and not sellTrigger ? "no SELL trigger" : "filters"
 
 // ── Plots ───────────────────────────────────────────────────────────────────
 colFast = color.new(#26a69a, 0)
 colSlow = color.new(#42a5f5, 0)
-colBias = color.new(#ab47bc, 35)
 pFast = plot(showRibbon ? emaFast : na, "EMA fast", colFast, 2)
 pSlow = plot(showRibbon ? emaSlow : na, "EMA slow", colSlow, 2)
-plot(showRibbon ? emaBias : na, "EMA bias", colBias, 2)
+plot(showRibbon ? emaBias : na, "EMA bias", color.new(#ab47bc, 35), 2)
 fill(pFast, pSlow, color=emaFast > emaSlow ? color.new(#26a69a, 88) : color.new(#ef5350, 88))
 
-stCol = stBull ? color.new(#00e676, 0) : color.new(#ff5252, 0)
-plot(showSt ? stLine : na, "Supertrend", stCol, 2, plot.style_linebr)
+plot(showSt and stBull ? stLine : na, "ST bull", color.new(#00e676, 0), 2, plot.style_linebr)
+plot(showSt and stBear ? stLine : na, "ST bear", color.new(#ff5252, 0), 2, plot.style_linebr)
 
-bgcolor(showBg ? (htfBull ? color.new(#00e676, 94) : color.new(#ff5252, 94)) : na, title="HTF bias")
+bgTint = not showBg ? na : alignedBuy ? color.new(#00e676, 94) : alignedSell ? color.new(#ff5252, 94) : conflict ? color.new(#ffd54f, 92) : na
+bgcolor(bgTint, title="Agreement tint")
 
-plotshape(buySignal, title="BUY", style=shape.labelup, location=location.belowbar, color=color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.small)
-plotshape(sellSignal, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.small)
+plotshape(buySignal, "BUY", shape.labelup, location.belowbar, color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.small)
+plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.small)
 
-// Risk levels on the signal bar
-buySl  = close - atr * slAtr
+buySl = close - atr * slAtr
 buyTp1 = close + atr * tp1Atr
 buyTp2 = close + atr * tp2Atr
-sellSl  = close + atr * slAtr
+sellSl = close + atr * slAtr
 sellTp1 = close - atr * tp1Atr
 sellTp2 = close - atr * tp2Atr
 
@@ -137,29 +159,41 @@ if showLevels and sellSignal
     label.new(bar_index, sellSl, "SL " + str.tostring(sellSl, format.mintick), style=label.style_label_down, color=color.new(#ff5252, 20), textcolor=color.white, size=size.tiny)
 
 // Dashboard
-var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(#0d1117, 12), border_width=1, border_color=color.new(#37474f, 0))
-f_cell(row, title, ok) =>
-    table.cell(dash, 0, row, title, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, row, ok ? "ON" : "OFF", text_color=ok ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
+var table dash = table.new(position.top_right, 2, 10, bgcolor=color.new(#0d1117, 8), border_width=1, border_color=color.new(#37474f, 0))
+dirTxt(bull, bear) =>
+    bull ? "BULL" : bear ? "BEAR" : "FLAT"
+dirCol(bull, bear) =>
+    bull ? color.new(#00e676, 0) : bear ? color.new(#ff5252, 0) : color.new(#ffd54f, 0)
+passTxt(ok) =>
+    ok ? "PASS" : "FAIL"
+passCol(ok) =>
+    ok ? color.new(#00e676, 0) : color.new(#ff5252, 0)
 
 if barstate.islast
-    table.cell(dash, 0, 0, "XAUUSD", text_color=color.white, text_size=size.normal)
-    table.cell(dash, 1, 0, htfBull ? "HTF BUY BIAS" : "HTF SELL BIAS", text_color=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    f_cell(1, "Session", inSess)
-    f_cell(2, "Volatility", volOk)
-    f_cell(3, "ADX", adxOk)
-    f_cell(4, "Supertrend", stBull)
-    f_cell(5, "MACD", macdBull)
-    table.cell(dash, 0, 6, "RSI", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 6, str.tostring(rsi, "#.0"), text_color=color.white, text_size=size.small)
-    table.cell(dash, 0, 7, "ADX", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 7, str.tostring(adx, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 0, modeName, text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 0, verdict, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : conflict ? color.new(#ffd54f, 0) : color.silver, text_size=size.small)
+    table.cell(dash, 0, 1, "Why", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, blockWhy, text_color=color.silver, text_size=size.small)
+    table.cell(dash, 0, 2, "Score B/S", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(buyScore) + "/8  " + str.tostring(sellScore) + "/8", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 3, "HTF", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 3, dirTxt(htfBull, htfBear), text_color=dirCol(htfBull, htfBear), text_size=size.small)
+    table.cell(dash, 0, 4, "Local EMA", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 4, dirTxt(localBull, localBear), text_color=dirCol(localBull, localBear), text_size=size.small)
+    table.cell(dash, 0, 5, "Supertrend", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, dirTxt(stBull, stBear), text_color=dirCol(stBull, stBear), text_size=size.small)
+    table.cell(dash, 0, 6, "MACD", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, dirTxt(macdBull, macdBear), text_color=dirCol(macdBull, macdBear), text_size=size.small)
+    table.cell(dash, 0, 7, "ADX " + str.tostring(adx, "#.0"), text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, passTxt(adxOk), text_color=passCol(adxOk), text_size=size.small)
+    table.cell(dash, 0, 8, "RSI " + str.tostring(rsi, "#.0"), text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 8, rsiBuyOk ? "BUY zone" : rsiSellOk ? "SELL zone" : "mid/extreme", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 9, "Session", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 9, (inSess ? "PASS " : "FAIL ") + sessStr, text_color=passCol(inSess), text_size=size.small)
 
-// Alerts (create in TradingView: Alert → this indicator → condition)
-alertcondition(buySignal, title="XAUUSD BUY", message="XAUUSD CONFLUENCE BUY | {{ticker}} {{interval}} close={{close}}")
-alertcondition(sellSignal, title="XAUUSD SELL", message="XAUUSD CONFLUENCE SELL | {{ticker}} {{interval}} close={{close}}")
-
+alertcondition(buySignal, "CONFLUENCE BUY", "BUY {{ticker}} {{interval}} close={{close}}")
+alertcondition(sellSignal, "CONFLUENCE SELL", "SELL {{ticker}} {{interval}} close={{close}}")
 if buySignal
-    alert("XAUUSD BUY  SL=" + str.tostring(buySl, format.mintick) + " TP1=" + str.tostring(buyTp1, format.mintick) + " TP2=" + str.tostring(buyTp2, format.mintick), alert.freq_once_per_bar_close)
+    alert("BUY " + modeName + " SL=" + str.tostring(buySl, format.mintick) + " TP1=" + str.tostring(buyTp1, format.mintick) + " TP2=" + str.tostring(buyTp2, format.mintick), alert.freq_once_per_bar_close)
 if sellSignal
-    alert("XAUUSD SELL SL=" + str.tostring(sellSl, format.mintick) + " TP1=" + str.tostring(sellTp1, format.mintick) + " TP2=" + str.tostring(sellTp2, format.mintick), alert.freq_once_per_bar_close)
+    alert("SELL " + modeName + " SL=" + str.tostring(sellSl, format.mintick) + " TP1=" + str.tostring(sellTp1, format.mintick) + " TP2=" + str.tostring(sellTp2, format.mintick), alert.freq_once_per_bar_close)
