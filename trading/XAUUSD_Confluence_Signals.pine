@@ -1,298 +1,190 @@
 //@version=5
-// Confluence Signals v5 BT — Impulse → Pullback → Continuation (STRATEGY for Strategy Tester)
-// Volume TRUE/FALSE is on the IMPULSE bar, not the entry bar.
-// TradingView backtest only runs on strategy(), not indicator(). Not financial advice.
-strategy("Confluence Signals v5 BT", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, max_labels_count=500, max_boxes_count=50, max_lines_count=500)
+// Confluence v6 — Fast quality: chart FLOW + volume TRUE/FALSE → BUY/SELL on bar close
+// Flow = EMA ribbon + VWAP + 5-bar volume pressure. Entry = EMA21 reject/cross, not climax chase.
+// SL = swing 5. TP1 = 1.5R, TP2 = 2.5R. Not financial advice.
+strategy("Confluence v6 Flow BT", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, max_labels_count=500, max_lines_count=500)
 
-grpInst = "Instrument"
-preset = input.string("Auto", "Preset", options=["Auto", "Gold", "Nifty", "Custom"], group=grpInst)
+grpT = "Trend / flow"
+emaFastLen = input.int(21, "Fast EMA", minval=2, group=grpT)
+emaSlowLen = input.int(55, "Slow EMA", minval=2, group=grpT)
+htf        = input.timeframe("60", "HTF", group=grpT)
+htfEmaLen  = input.int(50, "HTF EMA (closed bar)", minval=5, group=grpT)
+needHtf    = input.bool(false, "Require HTF agree (slower, stricter)", group=grpT)
 
-grpE = "Engine"
-dispAtr     = input.float(0.70, "Displacement body vs ATR", minval=0.3, step=0.05, group=grpE)
-maxImpBars  = input.int(24, "Impulse expires after N bars", minval=4, group=grpE)
-needVolImp  = input.bool(true, "Impulse must have volume TRUE", group=grpE)
-tradeMode   = input.string("Pullback OK", "HTF mode", options=["Pullback OK", "HTF must agree"], group=grpE)
-htf         = input.timeframe("60", "Higher timeframe", group=grpE)
-htfEmaLen   = input.int(50, "HTF EMA", minval=5, group=grpE)
-
-grpM = "Means"
-emaFastLen = input.int(21, "Fast EMA (pullback magnet)", minval=2, group=grpM)
-emaSlowLen = input.int(55, "Slow EMA", minval=2, group=grpM)
-showVwap   = input.bool(true, "Plot VWAP", group=grpM)
-
-grpV = "Volume on IMPULSE"
+grpV = "Volume"
 volAvgLen = input.int(20, "RVOL average", minval=5, group=grpV)
-rvolMin   = input.float(1.20, "Impulse min RVOL", minval=0.5, step=0.05, group=grpV)
+rvolMin   = input.float(1.00, "Min RVOL for VOLUME TRUE", minval=0.5, step=0.05, group=grpV)
+needVol   = input.bool(true, "Require VOLUME TRUE for labels", group=grpV)
 
 grpS = "Session"
-useSession  = input.bool(true, "Only signal in session", group=grpS)
-ignoreSessBT = input.bool(false, "Backtest: ignore session (fills Strategy Tester)", group=grpS)
-useKillzone = input.bool(false, "Gold killzones: London 0700-1000 + NY 1230-1600 UTC", group=grpS)
-sessTz      = input.string("UTC", "Gold timezone", options=["UTC", "America/New_York", "Asia/Kolkata", "Exchange"], group=grpS)
-customSess  = input.session("0700-1700", "Custom session", group=grpS)
+useSession = input.bool(false, "Filter session (off = faster labels 24h)", group=grpS)
+sessTz     = input.string("UTC", "Timezone", options=["UTC", "America/New_York", "Asia/Kolkata", "Exchange"], group=grpS)
+customSess = input.session("0700-1700", "Session", group=grpS)
 
-grpR = "Risk"
-tp1R       = input.float(1.5, "TP1 (R multiples of impulse stop)", minval=0.5, step=0.1, group=grpR)
-tp2R       = input.float(2.5, "TP2 (R)", minval=0.5, step=0.1, group=grpR)
-showLevels = input.bool(true, "SHOW SL + TP1 + TP2 lines", group=grpR)
-showPreview = input.bool(true, "Show planned SL/TP during impulse (before entry)", group=grpR)
-cooldownBars = input.int(6, "Min bars between signals", minval=1, group=grpR)
-
-grpU = "Display"
-showRibbon = input.bool(true, "EMAs", group=grpU)
-showBox    = input.bool(true, "Impulse box", group=grpU)
-showSetups = input.bool(true, "WAIT triangles", group=grpU)
+grpR = "SL / TARGET"
+swingLen     = input.int(5, "Swing bars for SL", minval=2, group=grpR)
+tp1R         = input.float(1.5, "TP1 R", minval=0.5, step=0.1, group=grpR)
+tp2R         = input.float(2.5, "TP2 R", minval=0.5, step=0.1, group=grpR)
+chaseAtr     = input.float(0.90, "Skip climax if body > ATR x", minval=0.4, step=0.05, group=grpR)
+cooldownBars = input.int(3, "Bars between signals", minval=1, group=grpR)
+showLevels   = input.bool(true, "SHOW SL + TP1 + TP2", group=grpR)
 
 tkr = str.upper(syminfo.ticker + " " + syminfo.tickerid)
-isNifty = str.contains(tkr, "NIFTY") or str.contains(tkr, "BANKNIFTY") or str.contains(tkr, "FINNIFTY")
-isGold  = str.contains(tkr, "XAU") or str.contains(tkr, "GOLD") or str.contains(tkr, "GC1") or str.contains(tkr, "GC2") or str.contains(tkr, "MGC")
-useNifty = preset == "Nifty" or (preset == "Auto" and isNifty)
-useGold  = preset == "Gold" or (preset == "Auto" and isGold and not isNifty)
-modeName = useNifty ? "NIFTY" : useGold ? "GOLD" : str.upper(syminfo.ticker)
-
-sessStr = preset == "Custom" ? customSess : useNifty ? "0915-1530" : "0700-1700"
-tzUsed  = useNifty ? "Asia/Kolkata" : sessTz == "Exchange" ? syminfo.timezone : sessTz
-inSess  = not useSession or not na(time(timeframe.period, sessStr, tzUsed))
-inKz    = not na(time(timeframe.period, "0700-1000", "UTC")) or not na(time(timeframe.period, "1230-1600", "UTC"))
-sessOk  = (ignoreSessBT or inSess) and (not useKillzone or not useGold or inKz)
+isNifty = str.contains(tkr, "NIFTY")
+isGold  = str.contains(tkr, "XAU") or str.contains(tkr, "GOLD") or str.contains(tkr, "GC1") or str.contains(tkr, "MGC")
+modeName = isNifty ? "NIFTY" : isGold ? "GOLD" : str.upper(syminfo.ticker)
+tzUsed = sessTz == "Exchange" ? syminfo.timezone : isNifty ? "Asia/Kolkata" : sessTz
+sessStr = isNifty ? "0915-1530" : customSess
+inSess = not useSession or not na(time(timeframe.period, sessStr, tzUsed))
 
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 vwapV   = ta.vwap(hlc3)
 atr     = ta.atr(14)
+body    = math.abs(close - open)
 
 volAvg = ta.sma(volume, volAvgLen)
 rvol   = volAvg == 0 ? 0.0 : volume / volAvg
-volTrue = rvol >= rvolMin
-rng  = high - low
-body = math.abs(close - open)
-bodyPct = rng == 0 ? 0.0 : body / rng
-absorption = volTrue and rvol >= 1.8 and rng < atr * 0.55
+buyVol5  = ta.sum(close >= open ? volume : 0.0, 5)
+sellVol5 = ta.sum(close < open ? volume : 0.0, 5)
+buyPress  = buyVol5 > sellVol5
+sellPress = sellVol5 > buyVol5
+rng = high - low
+absorption = rvol >= 1.8 and rng < atr * 0.55
+volTrueBuy  = rvol >= rvolMin and buyPress and not absorption
+volTrueSell = rvol >= rvolMin and sellPress and not absorption
+volTxt = absorption ? "ABSORB" : volTrueSell ? "TRUE SELL" : volTrueBuy ? "TRUE BUY" : "FALSE"
 
 htfClose = request.security(syminfo.tickerid, htf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, htfEmaLen)[1], barmerge.gaps_off, barmerge.lookahead_off)
 htfBull  = htfClose > htfEma
 htfBear  = htfClose < htfEma
-strictHtf = tradeMode == "HTF must agree"
 
-// Displacement = closes beyond the last 2 bars' extreme, strong body, not a doji
-dispUp = close > open and body > atr * dispAtr and bodyPct >= 0.55 and close > math.max(high[1], high[2]) and not absorption
-dispDn = close < open and body > atr * dispAtr and bodyPct >= 0.55 and close < math.min(low[1], low[2]) and not absorption
-dispUpOk = dispUp and (not needVolImp or volTrue)
-dispDnOk = dispDn and (not needVolImp or volTrue)
+flowBull = close > emaFast and emaFast > emaSlow and close > vwapV
+flowBear = close < emaFast and emaFast < emaSlow and close < vwapV
+flowTxt  = flowBull ? "BULLISH" : flowBear ? "BEARISH" : "CHOP"
 
-var int   bias = 0
-var float impHi = na
-var float impLo = na
-var int   impBar = na
-var bool  impVolOk = false
-var float impRvol = na
-var bool  pulled = false
-var box   impBox = na
+climaxUp = close > open and body > atr * chaseAtr
+climaxDn = close < open and body > atr * chaseAtr
+rejectBuy  = low <= emaFast and close > emaFast and close > open
+rejectSell = high >= emaFast and close < emaFast and close < open
+crossBuy  = ta.crossover(close, emaFast)
+crossSell = ta.crossunder(close, emaFast)
 
-expire = not na(impBar) and (bar_index - impBar) >= maxImpBars
-if barstate.isconfirmed and expire
-    bias := 0
-    pulled := false
+htfBuyOk  = not needHtf or htfBull
+htfSellOk = not needHtf or htfBear
+volBuyOk  = not needVol or volTrueBuy
+volSellOk = not needVol or volTrueSell
 
-if barstate.isconfirmed and dispUpOk
-    bias := 1
-    impHi := high
-    impLo := low
-    impBar := bar_index
-    impVolOk := volTrue
-    impRvol := rvol
-    pulled := false
-    if showBox
-        impBox := box.new(bar_index, high, bar_index, low, border_color=color.new(#00e676, 0), bgcolor=color.new(#00e676, 85), border_width=1)
+buyRaw  = inSess and flowBull and volBuyOk and htfBuyOk and (crossBuy or rejectBuy) and not climaxUp
+sellRaw = inSess and flowBear and volSellOk and htfSellOk and (crossSell or rejectSell) and not climaxDn
 
-if barstate.isconfirmed and dispDnOk
-    bias := -1
-    impHi := high
-    impLo := low
-    impBar := bar_index
-    impVolOk := volTrue
-    impRvol := rvol
-    pulled := false
-    if showBox
-        impBox := box.new(bar_index, high, bar_index, low, border_color=color.new(#ff5252, 0), bgcolor=color.new(#ff5252, 85), border_width=1)
-
-if bias == 1 and barstate.isconfirmed and close < impLo
-    bias := 0
-    pulled := false
-if bias == -1 and barstate.isconfirmed and close > impHi
-    bias := 0
-    pulled := false
-
-if bias != 0 and showBox and not na(impBox)
-    box.set_right(impBox, bar_index)
-
-midZ = (impHi + impLo) / 2
-touchBuy  = bias == 1 and (low <= emaFast or low <= vwapV or low <= midZ)
-touchSell = bias == -1 and (high >= emaFast or high >= vwapV or high >= midZ)
-if barstate.isconfirmed and touchBuy
-    pulled := true
-if barstate.isconfirmed and touchSell
-    pulled := true
-
-htfBuyOk  = not strictHtf or htfBull
-htfSellOk = not strictHtf or htfBear
-entryBuy  = bias == 1 and pulled and close > emaFast and close > open and body < atr * dispAtr and sessOk and htfBuyOk
-entrySell = bias == -1 and pulled and close < emaFast and close < open and body < atr * dispAtr and sessOk and htfSellOk
-
-var int lastSigBar = na
-coolOk = na(lastSigBar) or (bar_index - lastSigBar >= cooldownBars)
-buySignal  = barstate.isconfirmed and entryBuy and coolOk
-sellSignal = barstate.isconfirmed and entrySell and coolOk and not buySignal
+var int lastSig = na
+coolOk = na(lastSig) or (bar_index - lastSig >= cooldownBars)
+buySignal  = barstate.isconfirmed and buyRaw and coolOk
+sellSignal = barstate.isconfirmed and sellRaw and coolOk and not buySignal
 if buySignal or sellSignal
-    lastSigBar := bar_index
-    bias := 0
-    pulled := false
+    lastSig := bar_index
 
-buySl  = impLo
-sellSl = impHi
-buyRisk  = close - buySl
-sellRisk = sellSl - close
-buyTp1 = close + math.max(buyRisk, atr * 0.3) * tp1R
-buyTp2 = close + math.max(buyRisk, atr * 0.3) * tp2R
-sellTp1 = close - math.max(sellRisk, atr * 0.3) * tp1R
-sellTp2 = close - math.max(sellRisk, atr * 0.3) * tp2R
+swingLo = ta.lowest(low, swingLen)
+swingHi = ta.highest(high, swingLen)
+buySl  = math.min(swingLo, close - atr * 0.35)
+sellSl = math.max(swingHi, close + atr * 0.35)
+buyTp1 = close + math.max(close - buySl, atr * 0.3) * tp1R
+buyTp2 = close + math.max(close - buySl, atr * 0.3) * tp2R
+sellTp1 = close - math.max(sellSl - close, atr * 0.3) * tp1R
+sellTp2 = close - math.max(sellSl - close, atr * 0.3) * tp2R
 
 if buySignal
     strategy.close("S")
     strategy.entry("L", strategy.long)
-    strategy.exit("L1", from_entry="L", qty_percent=50, stop=buySl, limit=buyTp1)
-    strategy.exit("L2", from_entry="L", stop=buySl, limit=buyTp2)
+    strategy.exit("L1", "L", qty_percent=50, stop=buySl, limit=buyTp1)
+    strategy.exit("L2", "L", stop=buySl, limit=buyTp2)
 if sellSignal
     strategy.close("L")
     strategy.entry("S", strategy.short)
-    strategy.exit("S1", from_entry="S", qty_percent=50, stop=sellSl, limit=sellTp1)
-    strategy.exit("S2", from_entry="S", stop=sellSl, limit=sellTp2)
+    strategy.exit("S1", "S", qty_percent=50, stop=sellSl, limit=sellTp1)
+    strategy.exit("S2", "S", stop=sellSl, limit=sellTp2)
 
 var float visSl = na
 var float visTp1 = na
 var float visTp2 = na
-var float visEntry = na
 if buySignal
     visSl := buySl
     visTp1 := buyTp1
     visTp2 := buyTp2
-    visEntry := close
 if sellSignal
     visSl := sellSl
     visTp1 := sellTp1
     visTp2 := sellTp2
-    visEntry := close
 if strategy.position_size == 0 and not buySignal and not sellSignal
     visSl := na
     visTp1 := na
     visTp2 := na
-    visEntry := na
 
-planRisk = bias == 1 ? math.max(close - impLo, atr * 0.3) : bias == -1 ? math.max(impHi - close, atr * 0.3) : na
-planSl = showPreview and bias == 1 ? impLo : showPreview and bias == -1 ? impHi : na
-planTp1 = showPreview and bias == 1 ? close + planRisk * tp1R : showPreview and bias == -1 ? close - planRisk * tp1R : na
-planTp2 = showPreview and bias == 1 ? close + planRisk * tp2R : showPreview and bias == -1 ? close - planRisk * tp2R : na
+p1 = plot(emaFast, "EMA 21", color.new(#26a69a, 0), 2)
+p2 = plot(emaSlow, "EMA 55", color.new(#42a5f5, 0), 2)
+fill(p1, p2, color=emaFast > emaSlow ? color.new(#26a69a, 85) : color.new(#ef5350, 85))
+plot(vwapV, "VWAP", color.new(#ffd54f, 0), 2)
+plot(showLevels ? visSl : na, "SL", color.new(#ff1744, 0), 2, plot.style_linebr)
+plot(showLevels ? visTp1 : na, "TP1 TARGET", color.new(#76ff03, 0), 2, plot.style_linebr)
+plot(showLevels ? visTp2 : na, "TP2 TARGET", color.new(#00e676, 0), 3, plot.style_linebr)
 
-drawSl = showLevels ? (na(visSl) ? planSl : visSl) : na
-drawTp1 = showLevels ? (na(visTp1) ? planTp1 : visTp1) : na
-drawTp2 = showLevels ? (na(visTp2) ? planTp2 : visTp2) : na
-drawEn  = showLevels ? visEntry : na
-
-phase = buySignal ? "BUY" : sellSignal ? "SELL" : bias == 0 ? "NO IMPULSE" : not pulled ? "IMPULSE — wait pullback" : sessOk ? "PULLED — wait reject" : "OUT OF SESSION"
-why = buySignal or sellSignal ? "impulse + pullback reject" : not barstate.isconfirmed ? "bar OPEN" : not sessOk ? "session/killzone" : bias == 0 ? "need displacement + volume" : not pulled ? "do not chase — wait mean" : bias == -1 ? "need bearish close under 21 EMA" : "need bullish close over 21 EMA"
-
-pFast = plot(showRibbon ? emaFast : na, "EMA 21", color.new(#26a69a, 0), 2)
-pSlow = plot(showRibbon ? emaSlow : na, "EMA 55", color.new(#42a5f5, 0), 2)
-fill(pFast, pSlow, color=emaFast > emaSlow ? color.new(#26a69a, 88) : color.new(#ef5350, 88))
-plot(showVwap ? vwapV : na, "VWAP", color.new(#ffd54f, 0), 2)
-plot(drawSl, "SL", color.new(#ff1744, 0), 2, plot.style_linebr)
-plot(drawTp1, "TP1 TARGET", color.new(#76ff03, 0), 2, plot.style_linebr)
-plot(drawTp2, "TP2 TARGET", color.new(#00e676, 0), 3, plot.style_linebr)
-plot(drawEn, "ENTRY", color.new(#ffffff, 0), 1, plot.style_steplinebr)
-
-bgcolor(bias == 1 ? color.new(#00e676, 94) : bias == -1 ? color.new(#ff5252, 94) : na, title="Impulse bias")
-plotshape(barstate.isconfirmed and dispUpOk, "Impulse BUY", shape.diamond, location.belowbar, color.new(#00e676, 0), size=size.tiny)
-plotshape(barstate.isconfirmed and dispDnOk, "Impulse SELL", shape.diamond, location.abovebar, color.new(#ff5252, 0), size=size.tiny)
-plotshape(buySignal, "BUY", shape.labelup, location.belowbar, color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.small)
-plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.small)
-plotshape(showSetups and barstate.isconfirmed and bias == 1 and pulled and not buySignal, "WAIT BUY", shape.triangleup, location.belowbar, color.new(#69f0ae, 50), size=size.tiny)
-plotshape(showSetups and barstate.isconfirmed and bias == -1 and pulled and not sellSignal, "WAIT SELL", shape.triangledown, location.abovebar, color.new(#ff8a80, 50), size=size.tiny)
-
-if showLevels and buySignal
-    line.new(bar_index, buySl, bar_index + 16, buySl, color=color.new(#ff5252, 0), width=1, style=line.style_dotted)
-    line.new(bar_index, buyTp1, bar_index + 16, buyTp1, color=color.new(#69f0ae, 0), width=1, style=line.style_dotted)
-    line.new(bar_index, buyTp2, bar_index + 16, buyTp2, color=color.new(#00e676, 0), width=2, style=line.style_dotted)
-    label.new(bar_index, buySl, "SL", style=label.style_label_up, color=color.new(#ff5252, 20), textcolor=color.white, size=size.tiny)
-if showLevels and sellSignal
-    line.new(bar_index, sellSl, bar_index + 16, sellSl, color=color.new(#ff5252, 0), width=1, style=line.style_dotted)
-    line.new(bar_index, sellTp1, bar_index + 16, sellTp1, color=color.new(#69f0ae, 0), width=1, style=line.style_dotted)
-    line.new(bar_index, sellTp2, bar_index + 16, sellTp2, color=color.new(#00e676, 0), width=2, style=line.style_dotted)
-    label.new(bar_index, sellSl, "SL", style=label.style_label_down, color=color.new(#ff5252, 20), textcolor=color.white, size=size.tiny)
+bgcolor(flowBull ? color.new(#00e676, 93) : flowBear ? color.new(#ff5252, 93) : na, title="Flow")
+plotshape(buySignal, "BUY", shape.labelup, location.belowbar, color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.normal)
+plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.normal)
 
 var label lbSl = na
 var label lbT1 = na
 var label lbT2 = na
 if barstate.islast and showLevels
-    if not na(drawSl)
-        txtSl = (na(visSl) ? "PLAN SL " : "SL ") + str.tostring(drawSl, format.mintick)
+    if not na(visSl)
         if na(lbSl)
-            lbSl := label.new(bar_index, drawSl, txtSl, style=label.style_label_left, color=color.new(#ff1744, 0), textcolor=color.white, size=size.small)
+            lbSl := label.new(bar_index, visSl, "SL " + str.tostring(visSl, format.mintick), style=label.style_label_left, color=color.new(#ff1744, 0), textcolor=color.white, size=size.small)
         else
-            label.set_xy(lbSl, bar_index, drawSl)
-            label.set_text(lbSl, txtSl)
+            label.set_xy(lbSl, bar_index, visSl)
+            label.set_text(lbSl, "SL " + str.tostring(visSl, format.mintick))
     else if not na(lbSl)
         label.delete(lbSl)
         lbSl := na
-    if not na(drawTp1)
-        txtT1 = (na(visTp1) ? "PLAN TP1 " : "TP1 ") + str.tostring(drawTp1, format.mintick)
+    if not na(visTp1)
         if na(lbT1)
-            lbT1 := label.new(bar_index, drawTp1, txtT1, style=label.style_label_left, color=color.new(#76ff03, 20), textcolor=color.black, size=size.small)
+            lbT1 := label.new(bar_index, visTp1, "TP1 " + str.tostring(visTp1, format.mintick), style=label.style_label_left, color=color.new(#76ff03, 0), textcolor=color.black, size=size.small)
         else
-            label.set_xy(lbT1, bar_index, drawTp1)
-            label.set_text(lbT1, txtT1)
+            label.set_xy(lbT1, bar_index, visTp1)
+            label.set_text(lbT1, "TP1 " + str.tostring(visTp1, format.mintick))
     else if not na(lbT1)
         label.delete(lbT1)
         lbT1 := na
-    if not na(drawTp2)
-        txtT2 = (na(visTp2) ? "PLAN TP2 " : "TP2 ") + str.tostring(drawTp2, format.mintick)
+    if not na(visTp2)
         if na(lbT2)
-            lbT2 := label.new(bar_index, drawTp2, txtT2, style=label.style_label_left, color=color.new(#00e676, 0), textcolor=color.black, size=size.small)
+            lbT2 := label.new(bar_index, visTp2, "TP2 " + str.tostring(visTp2, format.mintick), style=label.style_label_left, color=color.new(#00e676, 0), textcolor=color.black, size=size.small)
         else
-            label.set_xy(lbT2, bar_index, drawTp2)
-            label.set_text(lbT2, txtT2)
+            label.set_xy(lbT2, bar_index, visTp2)
+            label.set_text(lbT2, "TP2 " + str.tostring(visTp2, format.mintick))
     else if not na(lbT2)
         label.delete(lbT2)
         lbT2 := na
 
-var table dash = table.new(position.top_right, 2, 12, bgcolor=color.new(#0d1117, 8), border_width=1, border_color=color.new(#37474f, 0))
+sigTxt = buySignal ? "BUY" : sellSignal ? "SELL" : flowBear and volTrueSell ? "WAIT SELL reject" : flowBull and volTrueBuy ? "WAIT BUY reject" : "NO SIGNAL"
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(#0d1117, 5), border_width=1, border_color=color.new(#37474f, 0))
 if barstate.islast
-    table.cell(dash, 0, 0, modeName + " v5 BT", text_color=color.white, text_size=size.normal)
-    table.cell(dash, 1, 0, phase, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : color.silver, text_size=size.small)
-    table.cell(dash, 0, 1, "Why", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 1, why, text_color=color.silver, text_size=size.small)
-    table.cell(dash, 0, 2, "Bias", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 2, bias == 1 ? "LONG impulse" : bias == -1 ? "SHORT impulse" : "FLAT", text_color=bias == 1 ? color.new(#00e676, 0) : bias == -1 ? color.new(#ff5252, 0) : color.gray, text_size=size.small)
-    table.cell(dash, 0, 3, "Impulse vol", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 3, bias == 0 ? "—" : (impVolOk ? "TRUE " : "FALSE ") + "RVOL " + str.tostring(impRvol, "#.00"), text_color=impVolOk ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    table.cell(dash, 0, 4, "This bar vol", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 4, (volTrue ? "EXPAND " : "WEAK ") + str.tostring(rvol, "#.00") + (absorption ? " ABSORB" : ""), text_color=volTrue ? color.new(#00e676, 0) : color.gray, text_size=size.small)
-    table.cell(dash, 0, 5, "HTF closed", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 5, htfBull ? "BULL" : "BEAR", text_color=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    table.cell(dash, 0, 6, "VWAP", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 6, close > vwapV ? "ABOVE" : "BELOW", text_color=close > vwapV ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    table.cell(dash, 0, 7, "Pullback", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 7, pulled ? "YES — wait reject" : "NO — do not chase", text_color=pulled ? color.new(#80d8ff, 0) : color.new(#ffd54f, 0), text_size=size.small)
-    table.cell(dash, 0, 8, "Session", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 8, (sessOk ? "PASS " : "FAIL ") + (useKillzone and useGold ? "KZ UTC" : sessStr), text_color=sessOk ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    table.cell(dash, 0, 9, "SL", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 9, na(drawSl) ? "—" : str.tostring(drawSl, format.mintick), text_color=color.new(#ff1744, 0), text_size=size.small)
-    table.cell(dash, 0, 10, "TP1", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 10, na(drawTp1) ? "—" : str.tostring(drawTp1, format.mintick), text_color=color.new(#76ff03, 0), text_size=size.small)
-    table.cell(dash, 0, 11, "TP2", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 11, na(drawTp2) ? "—" : str.tostring(drawTp2, format.mintick), text_color=color.new(#00e676, 0), text_size=size.small)
+    table.cell(dash, 0, 0, modeName + " v6", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 0, sigTxt, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : color.silver, text_size=size.normal)
+    table.cell(dash, 0, 1, "CHART FLOW", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, flowTxt, text_color=flowBull ? color.new(#00e676, 0) : flowBear ? color.new(#ff5252, 0) : color.new(#ffd54f, 0), text_size=size.large)
+    table.cell(dash, 0, 2, "VOLUME", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, volTxt + "  RVOL " + str.tostring(rvol, "#.00"), text_color=volTrueBuy or volTrueSell ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.normal)
+    table.cell(dash, 0, 3, "HTF", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 3, htfBull ? "BULLISH" : "BEARISH", text_color=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
+    table.cell(dash, 0, 4, "VWAP", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 4, close > vwapV ? "ABOVE" : "BELOW", text_color=close > vwapV ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
+    table.cell(dash, 0, 5, "SL", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, na(visSl) ? "—" : str.tostring(visSl, format.mintick), text_color=color.new(#ff1744, 0), text_size=size.small)
+    table.cell(dash, 0, 6, "TP1", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, na(visTp1) ? "—" : str.tostring(visTp1, format.mintick), text_color=color.new(#76ff03, 0), text_size=size.small)
+    table.cell(dash, 0, 7, "TP2", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, na(visTp2) ? "—" : str.tostring(visTp2, format.mintick), text_color=color.new(#00e676, 0), text_size=size.small)
 
-alertcondition(buySignal, "v5 BUY", "BUY {{ticker}} {{interval}} {{close}}")
-alertcondition(sellSignal, "v5 SELL", "SELL {{ticker}} {{interval}} {{close}}")
-alertcondition(dispUpOk, "v5 impulse long", "IMPULSE LONG {{ticker}}")
-alertcondition(dispDnOk, "v5 impulse short", "IMPULSE SHORT {{ticker}}")
+alertcondition(buySignal, "BUY", "BUY {{ticker}} {{close}}")
+alertcondition(sellSignal, "SELL", "SELL {{ticker}} {{close}}")
