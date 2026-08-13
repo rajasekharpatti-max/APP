@@ -1,161 +1,114 @@
 //@version=5
-// Confluence v8 — visible dashboard + trades on Gold 1h/15m
-// v7 had ZERO trades on GC1! 1h (18-21 UTC + HTF + RVOL 1.2 + reject-only).
-// Tester stays empty until one trade. Table uses size.small only (size.large can hide it).
-// Not financial advice.
-strategy("Confluence v8 Dash BT", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, max_labels_count=500, max_lines_count=500)
+// AJ Flow v9 — dashboard = LABEL (always visible). No ta.sum, no timeframe.in_seconds, no table frames.
+// BUY/SELL on bar close when FLOW + VOLUME agree and price rejects EMA21.
+// SL / TP1 / TP2 plotted. Not financial advice. Use tiny size. 650 Rs loss = stop trading size, not add size.
+strategy("AJ Flow v9", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=5, commission_type=strategy.commission.percent, commission_value=0.03, slippage=2, max_labels_count=500, max_lines_count=200)
 
-grpT = "Trend / flow"
-emaFastLen = input.int(21, "Fast EMA", minval=2, group=grpT)
-emaSlowLen = input.int(55, "Slow EMA", minval=2, group=grpT)
-htfIn      = input.timeframe("", "HTF (blank = auto 60 on M15, 240 on H1)", group=grpT)
-htfEmaLen  = input.int(50, "HTF EMA closed", minval=5, group=grpT)
-needHtf    = input.bool(false, "Require HTF agree", group=grpT)
+emaF = input.int(21, "EMA fast")
+emaS = input.int(55, "EMA slow")
+rvolMin = input.float(1.0, "RVOL min", step=0.05)
+needVol = input.bool(true, "Need volume TRUE")
+tp1R = input.float(1.5, "TP1 R", step=0.1)
+tp2R = input.float(2.0, "TP2 R", step=0.1)
+coolN = input.int(4, "Cooldown bars")
 
-grpV = "Volume"
-volAvgLen = input.int(20, "RVOL average", minval=5, group=grpV)
-rvolMin   = input.float(1.00, "Min RVOL", minval=0.5, step=0.05, group=grpV)
-needVol   = input.bool(true, "Require VOLUME TRUE", group=grpV)
+htf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" ? "60" : "240"
 
-grpS = "Hours"
-useQualityHrs = input.bool(false, "Only 18:00-21:00 (chart TZ)", group=grpS)
+e21 = ta.ema(close, emaF)
+e55 = ta.ema(close, emaS)
+vw = ta.vwap(hlc3)
+atr = ta.atr(14)
+body = math.abs(close - open)
 
-grpR = "SL / TARGET"
-swingLen     = input.int(5, "Swing bars for SL", minval=2, group=grpR)
-tp1R         = input.float(1.5, "TP1 R", minval=0.5, step=0.1, group=grpR)
-tp2R         = input.float(2.5, "TP2 R", minval=0.5, step=0.1, group=grpR)
-chaseAtr     = input.float(0.90, "Skip climax body > ATR x", minval=0.4, step=0.05, group=grpR)
-minBodyAtr   = input.float(0.20, "Min body vs ATR", minval=0.05, step=0.05, group=grpR)
-cooldownBars = input.int(4, "Bars between signals", minval=1, group=grpR)
-showLevels   = input.bool(true, "SHOW SL + TP1 + TP2", group=grpR)
+volMa = ta.sma(volume, 20)
+rvol = volMa == 0 ? 0.0 : volume / volMa
+buyV = ta.sma(close >= open ? volume : 0.0, 5) * 5
+selV = ta.sma(close < open ? volume : 0.0, 5) * 5
+volBuy = rvol >= rvolMin and buyV > selV
+volSel = rvol >= rvolMin and selV > buyV
+volTxt = volSel ? "TRUE SELL" : volBuy ? "TRUE BUY" : "FALSE"
 
-tfMin = timeframe.in_seconds() / 60
-htf = htfIn != "" ? htfIn : tfMin <= 15 ? "60" : tfMin <= 60 ? "240" : "D"
+htfC = request.security(syminfo.tickerid, htf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+htfE = request.security(syminfo.tickerid, htf, ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+htfUp = htfC > htfE
 
-emaFast = ta.ema(close, emaFastLen)
-emaSlow = ta.ema(close, emaSlowLen)
-vwapV   = ta.vwap(hlc3)
-atr     = ta.atr(14)
-body    = math.abs(close - open)
+flowUp = close > e21 and e21 > e55
+flowDn = close < e21 and e21 < e55
+flowTxt = flowUp ? "BULLISH" : flowDn ? "BEARISH" : "CHOP"
 
-volAvg = ta.sma(volume, volAvgLen)
-rvol   = volAvg == 0 ? 0.0 : volume / volAvg
-buyVol5  = ta.sma(close >= open ? volume : 0.0, 5) * 5
-sellVol5 = ta.sma(close < open ? volume : 0.0, 5) * 5
-buyPress  = buyVol5 > sellVol5
-sellPress = sellVol5 > buyVol5
-rng = high - low
-absorption = rvol >= 1.8 and rng < atr * 0.55
-volTrueBuy  = rvol >= rvolMin and buyPress and not absorption
-volTrueSell = rvol >= rvolMin and sellPress and not absorption
-volTxt = absorption ? "ABSORB" : volTrueSell ? "TRUE SELL" : volTrueBuy ? "TRUE BUY" : "FALSE"
+climax = body > atr * 0.9
+rejUp = low <= e21 and close > e21 and close > open and body > atr * 0.2
+rejDn = high >= e21 and close < e21 and close < open and body > atr * 0.2
+xUp = ta.crossover(close, e21) and body > atr * 0.2
+xDn = ta.crossunder(close, e21) and body > atr * 0.2
 
-htfClose = request.security(syminfo.tickerid, htf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
-htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, htfEmaLen)[1], barmerge.gaps_off, barmerge.lookahead_off)
-htfBull  = htfClose > htfEma
-htfBear  = htfClose < htfEma
+buyRaw = flowUp and (not needVol or volBuy) and (rejUp or xUp) and not climax
+selRaw = flowDn and (not needVol or volSel) and (rejDn or xDn) and not climax
 
-flowBull = close > emaFast and emaFast > emaSlow
-flowBear = close < emaFast and emaFast < emaSlow
-flowTxt  = flowBull ? "BULLISH" : flowBear ? "BEARISH" : "CHOP"
+var int lastB = na
+okGap = na(lastB) or bar_index - lastB >= coolN
+buySig = barstate.isconfirmed and buyRaw and okGap
+selSig = barstate.isconfirmed and selRaw and okGap and not buySig
+if buySig or selSig
+    lastB := bar_index
 
-h = hour(time)
-hourOk = not useQualityHrs or (h >= 18 and h < 21)
+slL = math.min(ta.lowest(low, 5), close - atr * 0.35)
+slS = math.max(ta.highest(high, 5), close + atr * 0.35)
+tp1L = close + math.max(close - slL, atr * 0.3) * tp1R
+tp2L = close + math.max(close - slL, atr * 0.3) * tp2R
+tp1S = close - math.max(slS - close, atr * 0.3) * tp1R
+tp2S = close - math.max(slS - close, atr * 0.3) * tp2R
 
-climaxUp = close > open and body > atr * chaseAtr
-climaxDn = close < open and body > atr * chaseAtr
-bodyOk = body >= atr * minBodyAtr
-rejectBuy  = low <= emaFast and close > emaFast and close > open and bodyOk
-rejectSell = high >= emaFast and close < emaFast and close < open and bodyOk
-crossBuy  = ta.crossover(close, emaFast) and bodyOk
-crossSell = ta.crossunder(close, emaFast) and bodyOk
-
-htfBuyOk  = not needHtf or htfBull
-htfSellOk = not needHtf or htfBear
-volBuyOk  = not needVol or volTrueBuy
-volSellOk = not needVol or volTrueSell
-
-buyRaw  = hourOk and flowBull and volBuyOk and htfBuyOk and (rejectBuy or crossBuy) and not climaxUp
-sellRaw = hourOk and flowBear and volSellOk and htfSellOk and (rejectSell or crossSell) and not climaxDn
-
-var int lastSig = na
-coolOk = na(lastSig) or (bar_index - lastSig >= cooldownBars)
-buySignal  = barstate.isconfirmed and buyRaw and coolOk
-sellSignal = barstate.isconfirmed and sellRaw and coolOk and not buySignal
-if buySignal or sellSignal
-    lastSig := bar_index
-
-swingLo = ta.lowest(low, swingLen)
-swingHi = ta.highest(high, swingLen)
-buySl  = math.min(swingLo, close - atr * 0.35)
-sellSl = math.max(swingHi, close + atr * 0.35)
-buyTp1 = close + math.max(close - buySl, atr * 0.3) * tp1R
-buyTp2 = close + math.max(close - buySl, atr * 0.3) * tp2R
-sellTp1 = close - math.max(sellSl - close, atr * 0.3) * tp1R
-sellTp2 = close - math.max(sellSl - close, atr * 0.3) * tp2R
-
-if buySignal
+if buySig
     strategy.close("S")
     strategy.entry("L", strategy.long)
-    strategy.exit("L1", "L", qty_percent=50, stop=buySl, limit=buyTp1)
-    strategy.exit("L2", "L", stop=buySl, limit=buyTp2)
-if sellSignal
+    strategy.exit("L1", "L", qty_percent=50, stop=slL, limit=tp1L)
+    strategy.exit("L2", "L", stop=slL, limit=tp2L)
+if selSig
     strategy.close("L")
     strategy.entry("S", strategy.short)
-    strategy.exit("S1", "S", qty_percent=50, stop=sellSl, limit=sellTp1)
-    strategy.exit("S2", "S", stop=sellSl, limit=sellTp2)
+    strategy.exit("S1", "S", qty_percent=50, stop=slS, limit=tp1S)
+    strategy.exit("S2", "S", stop=slS, limit=tp2S)
 
-var float visSl = na
-var float visTp1 = na
-var float visTp2 = na
-if buySignal
-    visSl := buySl
-    visTp1 := buyTp1
-    visTp2 := buyTp2
-if sellSignal
-    visSl := sellSl
-    visTp1 := sellTp1
-    visTp2 := sellTp2
-if strategy.position_size == 0 and not buySignal and not sellSignal
-    visSl := na
-    visTp1 := na
-    visTp2 := na
+var float pSl = na
+var float pT1 = na
+var float pT2 = na
+if buySig
+    pSl := slL
+    pT1 := tp1L
+    pT2 := tp2L
+if selSig
+    pSl := slS
+    pT1 := tp1S
+    pT2 := tp2S
+if strategy.position_size == 0 and not buySig and not selSig
+    pSl := na
+    pT1 := na
+    pT2 := na
 
-p1 = plot(emaFast, "EMA 21", color.new(#26a69a, 0), 2)
-p2 = plot(emaSlow, "EMA 55", color.new(#42a5f5, 0), 2)
-fill(p1, p2, color=emaFast > emaSlow ? color.new(#26a69a, 85) : color.new(#ef5350, 85))
-plot(vwapV, "VWAP", color.new(#ffd54f, 0), 2)
-plot(showLevels ? visSl : na, "SL", color.new(#ff1744, 0), 2, plot.style_linebr)
-plot(showLevels ? visTp1 : na, "TP1", color.new(#76ff03, 0), 2, plot.style_linebr)
-plot(showLevels ? visTp2 : na, "TP2", color.new(#00e676, 0), 3, plot.style_linebr)
+a = plot(e21, "EMA21", color.new(#00e5ff, 0), 2)
+b = plot(e55, "EMA55", color.new(#ffab00, 0), 2)
+fill(a, b, color=e21 > e55 ? color.new(#00c853, 85) : color.new(#ff1744, 85))
+plot(vw, "VWAP", color.yellow, 2)
+plot(pSl, "SL", color.red, 3, plot.style_linebr)
+plot(pT1, "TP1", color.lime, 2, plot.style_linebr)
+plot(pT2, "TP2", color.green, 3, plot.style_linebr)
+bgcolor(flowUp ? color.new(#00c853, 88) : flowDn ? color.new(#ff1744, 88) : color.new(#ffd600, 90))
+plotshape(buySig, title="BUY", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY", textcolor=color.white, size=size.normal)
+plotshape(selSig, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL", textcolor=color.white, size=size.normal)
 
-bgcolor(flowBull ? color.new(#00c853, 90) : flowBear ? color.new(#ff1744, 90) : color.new(#ffd54f, 92), title="Flow")
-plotshape(buySignal, "BUY", shape.labelup, location.belowbar, color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.normal)
-plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.normal)
+sig = buySig ? "BUY" : selSig ? "SELL" : flowDn and volSel ? "WAIT SELL" : flowUp and volBuy ? "WAIT BUY" : "NO SIGNAL"
+slTx = na(pSl) ? "-" : str.tostring(pSl, format.mintick)
+t1Tx = na(pT1) ? "-" : str.tostring(pT1, format.mintick)
+t2Tx = na(pT2) ? "-" : str.tostring(pT2, format.mintick)
+msg = "AJ v9  " + sig + "\nFLOW  " + flowTxt + "\nVOL   " + volTxt + "  RVOL " + str.tostring(rvol, "#.00") + "\nHTF   " + (htfUp ? "BULL" : "BEAR") + "  " + htf + "\nVWAP  " + (close > vw ? "ABOVE" : "BELOW") + "\nSL " + slTx + "\nTP1 " + t1Tx + "\nTP2 " + t2Tx
 
-sigTxt = buySignal ? "BUY" : sellSignal ? "SELL" : not hourOk ? "OFF HOURS" : flowBear and volTrueSell ? "WAIT SELL" : flowBull and volTrueBuy ? "WAIT BUY" : "NO SIGNAL"
-
-// Dashboard — always drawn, opaque, top-right
-var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(#000000, 0), border_width=2, border_color=color.white, frame_color=color.white, frame_width=2)
+var label dash = na
 if barstate.islast
-    table.cell(dash, 0, 0, "CONFLUENCE v8", text_color=color.white, text_size=size.small, bgcolor=color.new(#1565c0, 0))
-    table.cell(dash, 1, 0, sigTxt, text_color=color.white, text_size=size.small, bgcolor=buySignal ? color.new(#00c853, 0) : sellSignal ? color.new(#d50000, 0) : color.new(#424242, 0))
-    table.cell(dash, 0, 1, "FLOW", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 1, flowTxt, text_color=color.black, text_size=size.small, bgcolor=flowBull ? color.new(#00e676, 0) : flowBear ? color.new(#ff5252, 0) : color.new(#ffd54f, 0))
-    table.cell(dash, 0, 2, "VOLUME", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 2, volTxt, text_color=color.black, text_size=size.small, bgcolor=volTrueBuy or volTrueSell ? color.new(#00e676, 0) : color.new(#ff8a80, 0))
-    table.cell(dash, 0, 3, "RVOL", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 3, str.tostring(rvol, "#.00"), text_color=color.white, text_size=size.small)
-    table.cell(dash, 0, 4, "HTF " + htf, text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 4, htfBull ? "BULLISH" : "BEARISH", text_color=color.black, text_size=size.small, bgcolor=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0))
-    table.cell(dash, 0, 5, "VWAP", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 5, close > vwapV ? "ABOVE" : "BELOW", text_color=color.white, text_size=size.small)
-    table.cell(dash, 0, 6, "SL", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 6, na(visSl) ? "no trade" : str.tostring(visSl, format.mintick), text_color=color.new(#ff8a80, 0), text_size=size.small)
-    table.cell(dash, 0, 7, "TP1 / TP2", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 7, na(visTp1) ? "no trade" : str.tostring(visTp1, format.mintick) + " / " + str.tostring(visTp2, format.mintick), text_color=color.new(#69f0ae, 0), text_size=size.small)
-    table.cell(dash, 0, 8, "HOUR", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 8, str.tostring(h) + (hourOk ? " OK" : " BLOCK"), text_color=color.white, text_size=size.small)
+    if not na(dash)
+        label.delete(dash)
+    col = buySig ? color.green : selSig ? color.red : flowDn ? color.new(#b71c1c, 0) : flowUp ? color.new(#1b5e20, 0) : color.new(#212121, 0)
+    dash := label.new(bar_index, high, msg, xloc=xloc.bar_index, yloc=yloc.abovebar, style=label.style_label_down, color=col, textcolor=color.white, size=size.normal, textalign=text.align_left)
 
-alertcondition(buySignal, "BUY", "BUY {{ticker}} {{close}}")
-alertcondition(sellSignal, "SELL", "SELL {{ticker}} {{close}}")
+alertcondition(buySig, "BUY", "BUY")
+alertcondition(selSig, "SELL", "SELL")
