@@ -1,39 +1,36 @@
 //@version=5
-// Confluence v7 — same engine as v6, tighter after USOIL backtest
-// v6 was NOT a live edge (PF 1.03, almost all profit on 9-11 Mar).
-// v7: HTF must agree, RVOL 1.2, EMA21 REJECT only (no thin crossover), optional 18:00-21:00 UTC.
-// SL swing 5, TP 1.5R / 2.5R. Bar close only. Not financial advice.
-strategy("Confluence v7 Quality BT", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, max_labels_count=500, max_lines_count=500)
+// Confluence v8 — visible dashboard + trades on Gold 1h/15m
+// v7 had ZERO trades on GC1! 1h (18-21 UTC + HTF + RVOL 1.2 + reject-only).
+// Tester stays empty until one trade. Table uses size.small only (size.large can hide it).
+// Not financial advice.
+strategy("Confluence v8 Dash BT", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, max_labels_count=500, max_lines_count=500)
 
 grpT = "Trend / flow"
 emaFastLen = input.int(21, "Fast EMA", minval=2, group=grpT)
 emaSlowLen = input.int(55, "Slow EMA", minval=2, group=grpT)
-htf        = input.timeframe("60", "HTF", group=grpT)
-htfEmaLen  = input.int(50, "HTF EMA (closed bar)", minval=5, group=grpT)
-needHtf    = input.bool(true, "Require HTF agree", group=grpT)
+htfIn      = input.timeframe("", "HTF (blank = auto 60 on M15, 240 on H1)", group=grpT)
+htfEmaLen  = input.int(50, "HTF EMA closed", minval=5, group=grpT)
+needHtf    = input.bool(false, "Require HTF agree", group=grpT)
 
 grpV = "Volume"
 volAvgLen = input.int(20, "RVOL average", minval=5, group=grpV)
-rvolMin   = input.float(1.20, "Min RVOL for VOLUME TRUE", minval=0.5, step=0.05, group=grpV)
+rvolMin   = input.float(1.00, "Min RVOL", minval=0.5, step=0.05, group=grpV)
 needVol   = input.bool(true, "Require VOLUME TRUE", group=grpV)
 
-grpS = "Hours (UTC)"
-useQualityHrs = input.bool(true, "Only 18:00-21:00 UTC (hours that paid on USOIL test)", group=grpS)
-block14       = input.bool(true, "Block 14:00 and 16:00 UTC", group=grpS)
+grpS = "Hours"
+useQualityHrs = input.bool(false, "Only 18:00-21:00 (chart TZ)", group=grpS)
 
 grpR = "SL / TARGET"
 swingLen     = input.int(5, "Swing bars for SL", minval=2, group=grpR)
 tp1R         = input.float(1.5, "TP1 R", minval=0.5, step=0.1, group=grpR)
 tp2R         = input.float(2.5, "TP2 R", minval=0.5, step=0.1, group=grpR)
-chaseAtr     = input.float(0.90, "Skip climax if body > ATR x", minval=0.4, step=0.05, group=grpR)
-minBodyAtr   = input.float(0.25, "Min body vs ATR (skip 1-bar doji)", minval=0.05, step=0.05, group=grpR)
-cooldownBars = input.int(5, "Bars between signals", minval=1, group=grpR)
+chaseAtr     = input.float(0.90, "Skip climax body > ATR x", minval=0.4, step=0.05, group=grpR)
+minBodyAtr   = input.float(0.20, "Min body vs ATR", minval=0.05, step=0.05, group=grpR)
+cooldownBars = input.int(4, "Bars between signals", minval=1, group=grpR)
 showLevels   = input.bool(true, "SHOW SL + TP1 + TP2", group=grpR)
 
-tkr = str.upper(syminfo.ticker + " " + syminfo.tickerid)
-isNifty = str.contains(tkr, "NIFTY")
-isGold  = str.contains(tkr, "XAU") or str.contains(tkr, "GOLD") or str.contains(tkr, "GC1") or str.contains(tkr, "MGC")
-modeName = isNifty ? "NIFTY" : isGold ? "GOLD" : str.upper(syminfo.ticker)
+tfMin = timeframe.in_seconds() / 60
+htf = htfIn != "" ? htfIn : tfMin <= 15 ? "60" : tfMin <= 60 ? "240" : "D"
 
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
@@ -58,28 +55,28 @@ htfEma   = request.security(syminfo.tickerid, htf, ta.ema(close, htfEmaLen)[1], 
 htfBull  = htfClose > htfEma
 htfBear  = htfClose < htfEma
 
-flowBull = close > emaFast and emaFast > emaSlow and close > vwapV
-flowBear = close < emaFast and emaFast < emaSlow and close < vwapV
+flowBull = close > emaFast and emaFast > emaSlow
+flowBear = close < emaFast and emaFast < emaSlow
 flowTxt  = flowBull ? "BULLISH" : flowBear ? "BEARISH" : "CHOP"
 
-h = hour(time, "UTC")
-inQual = not useQualityHrs or (h >= 18 and h < 21)
-blocked = block14 and (h == 14 or h == 16)
-hourOk = inQual and not blocked
+h = hour(time)
+hourOk = not useQualityHrs or (h >= 18 and h < 21)
 
 climaxUp = close > open and body > atr * chaseAtr
 climaxDn = close < open and body > atr * chaseAtr
 bodyOk = body >= atr * minBodyAtr
 rejectBuy  = low <= emaFast and close > emaFast and close > open and bodyOk
 rejectSell = high >= emaFast and close < emaFast and close < open and bodyOk
+crossBuy  = ta.crossover(close, emaFast) and bodyOk
+crossSell = ta.crossunder(close, emaFast) and bodyOk
 
 htfBuyOk  = not needHtf or htfBull
 htfSellOk = not needHtf or htfBear
 volBuyOk  = not needVol or volTrueBuy
 volSellOk = not needVol or volTrueSell
 
-buyRaw  = hourOk and flowBull and volBuyOk and htfBuyOk and rejectBuy and not climaxUp
-sellRaw = hourOk and flowBear and volSellOk and htfSellOk and rejectSell and not climaxDn
+buyRaw  = hourOk and flowBull and volBuyOk and htfBuyOk and (rejectBuy or crossBuy) and not climaxUp
+sellRaw = hourOk and flowBear and volSellOk and htfSellOk and (rejectSell or crossSell) and not climaxDn
 
 var int lastSig = na
 coolOk = na(lastSig) or (bar_index - lastSig >= cooldownBars)
@@ -129,67 +126,36 @@ p2 = plot(emaSlow, "EMA 55", color.new(#42a5f5, 0), 2)
 fill(p1, p2, color=emaFast > emaSlow ? color.new(#26a69a, 85) : color.new(#ef5350, 85))
 plot(vwapV, "VWAP", color.new(#ffd54f, 0), 2)
 plot(showLevels ? visSl : na, "SL", color.new(#ff1744, 0), 2, plot.style_linebr)
-plot(showLevels ? visTp1 : na, "TP1 TARGET", color.new(#76ff03, 0), 2, plot.style_linebr)
-plot(showLevels ? visTp2 : na, "TP2 TARGET", color.new(#00e676, 0), 3, plot.style_linebr)
+plot(showLevels ? visTp1 : na, "TP1", color.new(#76ff03, 0), 2, plot.style_linebr)
+plot(showLevels ? visTp2 : na, "TP2", color.new(#00e676, 0), 3, plot.style_linebr)
 
-bgcolor(flowBull ? color.new(#00e676, 93) : flowBear ? color.new(#ff5252, 93) : na, title="Flow")
+bgcolor(flowBull ? color.new(#00c853, 90) : flowBear ? color.new(#ff1744, 90) : color.new(#ffd54f, 92), title="Flow")
 plotshape(buySignal, "BUY", shape.labelup, location.belowbar, color.new(#00c853, 0), text="BUY", textcolor=color.white, size=size.normal)
 plotshape(sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.normal)
 
-var label lbSl = na
-var label lbT1 = na
-var label lbT2 = na
-if barstate.islast and showLevels
-    if not na(visSl)
-        txt = "SL " + str.tostring(visSl, format.mintick)
-        if na(lbSl)
-            lbSl := label.new(bar_index, visSl, txt, style=label.style_label_left, color=color.new(#ff1744, 0), textcolor=color.white, size=size.small)
-        else
-            label.set_xy(lbSl, bar_index, visSl)
-            label.set_text(lbSl, txt)
-    else if not na(lbSl)
-        label.delete(lbSl)
-        lbSl := na
-    if not na(visTp1)
-        txt = "TP1 " + str.tostring(visTp1, format.mintick)
-        if na(lbT1)
-            lbT1 := label.new(bar_index, visTp1, txt, style=label.style_label_left, color=color.new(#76ff03, 0), textcolor=color.black, size=size.small)
-        else
-            label.set_xy(lbT1, bar_index, visTp1)
-            label.set_text(lbT1, txt)
-    else if not na(lbT1)
-        label.delete(lbT1)
-        lbT1 := na
-    if not na(visTp2)
-        txt = "TP2 " + str.tostring(visTp2, format.mintick)
-        if na(lbT2)
-            lbT2 := label.new(bar_index, visTp2, txt, style=label.style_label_left, color=color.new(#00e676, 0), textcolor=color.black, size=size.small)
-        else
-            label.set_xy(lbT2, bar_index, visTp2)
-            label.set_text(lbT2, txt)
-    else if not na(lbT2)
-        label.delete(lbT2)
-        lbT2 := na
+sigTxt = buySignal ? "BUY" : sellSignal ? "SELL" : not hourOk ? "OFF HOURS" : flowBear and volTrueSell ? "WAIT SELL" : flowBull and volTrueBuy ? "WAIT BUY" : "NO SIGNAL"
 
-sigTxt = buySignal ? "BUY" : sellSignal ? "SELL" : not hourOk ? "OFF HOURS" : flowBear and volTrueSell ? "WAIT SELL reject" : flowBull and volTrueBuy ? "WAIT BUY reject" : "NO SIGNAL"
-var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(#0d1117, 5), border_width=1, border_color=color.new(#37474f, 0))
+// Dashboard — always drawn, opaque, top-right
+var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(#000000, 0), border_width=2, border_color=color.white, frame_color=color.white, frame_width=2)
 if barstate.islast
-    table.cell(dash, 0, 0, modeName + " v7", text_color=color.white, text_size=size.normal)
-    table.cell(dash, 1, 0, sigTxt, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : color.silver, text_size=size.normal)
-    table.cell(dash, 0, 1, "CHART FLOW", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 1, flowTxt, text_color=flowBull ? color.new(#00e676, 0) : flowBear ? color.new(#ff5252, 0) : color.new(#ffd54f, 0), text_size=size.large)
-    table.cell(dash, 0, 2, "VOLUME", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 2, volTxt + "  RVOL " + str.tostring(rvol, "#.00"), text_color=volTrueBuy or volTrueSell ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.normal)
-    table.cell(dash, 0, 3, "HTF", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 3, htfBull ? "BULLISH" : "BEARISH", text_color=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    table.cell(dash, 0, 4, "UTC hour", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 4, str.tostring(h) + (hourOk ? " OK" : " BLOCK"), text_color=hourOk ? color.new(#00e676, 0) : color.new(#ff5252, 0), text_size=size.small)
-    table.cell(dash, 0, 5, "SL", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 5, na(visSl) ? "—" : str.tostring(visSl, format.mintick), text_color=color.new(#ff1744, 0), text_size=size.small)
-    table.cell(dash, 0, 6, "TP1", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 6, na(visTp1) ? "—" : str.tostring(visTp1, format.mintick), text_color=color.new(#76ff03, 0), text_size=size.small)
-    table.cell(dash, 0, 7, "TP2", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 7, na(visTp2) ? "—" : str.tostring(visTp2, format.mintick), text_color=color.new(#00e676, 0), text_size=size.small)
+    table.cell(dash, 0, 0, "CONFLUENCE v8", text_color=color.white, text_size=size.small, bgcolor=color.new(#1565c0, 0))
+    table.cell(dash, 1, 0, sigTxt, text_color=color.white, text_size=size.small, bgcolor=buySignal ? color.new(#00c853, 0) : sellSignal ? color.new(#d50000, 0) : color.new(#424242, 0))
+    table.cell(dash, 0, 1, "FLOW", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, flowTxt, text_color=color.black, text_size=size.small, bgcolor=flowBull ? color.new(#00e676, 0) : flowBear ? color.new(#ff5252, 0) : color.new(#ffd54f, 0))
+    table.cell(dash, 0, 2, "VOLUME", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, volTxt, text_color=color.black, text_size=size.small, bgcolor=volTrueBuy or volTrueSell ? color.new(#00e676, 0) : color.new(#ff8a80, 0))
+    table.cell(dash, 0, 3, "RVOL", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(rvol, "#.00"), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 4, "HTF " + htf, text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, htfBull ? "BULLISH" : "BEARISH", text_color=color.black, text_size=size.small, bgcolor=htfBull ? color.new(#00e676, 0) : color.new(#ff5252, 0))
+    table.cell(dash, 0, 5, "VWAP", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 5, close > vwapV ? "ABOVE" : "BELOW", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 6, "SL", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 6, na(visSl) ? "no trade" : str.tostring(visSl, format.mintick), text_color=color.new(#ff8a80, 0), text_size=size.small)
+    table.cell(dash, 0, 7, "TP1 / TP2", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 7, na(visTp1) ? "no trade" : str.tostring(visTp1, format.mintick) + " / " + str.tostring(visTp2, format.mintick), text_color=color.new(#69f0ae, 0), text_size=size.small)
+    table.cell(dash, 0, 8, "HOUR", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 8, str.tostring(h) + (hourOk ? " OK" : " BLOCK"), text_color=color.white, text_size=size.small)
 
 alertcondition(buySignal, "BUY", "BUY {{ticker}} {{close}}")
 alertcondition(sellSignal, "SELL", "SELL {{ticker}} {{close}}")
