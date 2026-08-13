@@ -45,8 +45,8 @@ body    = math.abs(close - open)
 
 volAvg = ta.sma(volume, volAvgLen)
 rvol   = volAvg == 0 ? 0.0 : volume / volAvg
-buyVol5  = ta.sum(close >= open ? volume : 0.0, 5)
-sellVol5 = ta.sum(close < open ? volume : 0.0, 5)
+buyVol5  = ta.sma(close >= open ? volume : 0.0, 5) * 5
+sellVol5 = ta.sma(close < open ? volume : 0.0, 5) * 5
 buyPress  = buyVol5 > sellVol5
 sellPress = sellVol5 > buyVol5
 rng = high - low
