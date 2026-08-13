@@ -1,9 +1,8 @@
 //@version=5
-// Confluence Signals v5 — Impulse → Pullback → Continuation
-// Volume is judged on the IMPULSE bar (TRUE/FALSE), not on the entry bar.
-// Entry is the retrace to EMA21 / VWAP / 50% of the impulse, then a reject close.
-// HTF uses the last CLOSED 60m bar. Signals fire only on bar close. Not financial advice.
-indicator("Confluence Signals v5", overlay=true, max_labels_count=500, max_boxes_count=50, max_lines_count=500)
+// Confluence Signals v5 BT — Impulse → Pullback → Continuation (STRATEGY for Strategy Tester)
+// Volume TRUE/FALSE is on the IMPULSE bar, not the entry bar.
+// TradingView backtest only runs on strategy(), not indicator(). Not financial advice.
+strategy("Confluence Signals v5 BT", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, max_labels_count=500, max_boxes_count=50, max_lines_count=500)
 
 grpInst = "Instrument"
 preset = input.string("Auto", "Preset", options=["Auto", "Gold", "Nifty", "Custom"], group=grpInst)
@@ -27,6 +26,7 @@ rvolMin   = input.float(1.20, "Impulse min RVOL", minval=0.5, step=0.05, group=g
 
 grpS = "Session"
 useSession  = input.bool(true, "Only signal in session", group=grpS)
+ignoreSessBT = input.bool(false, "Backtest: ignore session (fills Strategy Tester)", group=grpS)
 useKillzone = input.bool(false, "Gold killzones: London 0700-1000 + NY 1230-1600 UTC", group=grpS)
 sessTz      = input.string("UTC", "Gold timezone", options=["UTC", "America/New_York", "Asia/Kolkata", "Exchange"], group=grpS)
 customSess  = input.session("0700-1700", "Custom session", group=grpS)
@@ -53,7 +53,7 @@ sessStr = preset == "Custom" ? customSess : useNifty ? "0915-1530" : "0700-1700"
 tzUsed  = useNifty ? "Asia/Kolkata" : sessTz == "Exchange" ? syminfo.timezone : sessTz
 inSess  = not useSession or not na(time(timeframe.period, sessStr, tzUsed))
 inKz    = not na(time(timeframe.period, "0700-1000", "UTC")) or not na(time(timeframe.period, "1230-1600", "UTC"))
-sessOk  = inSess and (not useKillzone or not useGold or inKz)
+sessOk  = (ignoreSessBT or inSess) and (not useKillzone or not useGold or inKz)
 
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
@@ -103,8 +103,6 @@ if barstate.isconfirmed and dispUpOk
     impRvol := rvol
     pulled := false
     if showBox
-        if not na(impBox)
-            box.delete(impBox)
         impBox := box.new(bar_index, high, bar_index, low, border_color=color.new(#00e676, 0), bgcolor=color.new(#00e676, 85), border_width=1)
 
 if barstate.isconfirmed and dispDnOk
@@ -116,8 +114,6 @@ if barstate.isconfirmed and dispDnOk
     impRvol := rvol
     pulled := false
     if showBox
-        if not na(impBox)
-            box.delete(impBox)
         impBox := box.new(bar_index, high, bar_index, low, border_color=color.new(#ff5252, 0), bgcolor=color.new(#ff5252, 85), border_width=1)
 
 if bias == 1 and barstate.isconfirmed and close < impLo
@@ -161,6 +157,17 @@ buyTp2 = close + math.max(buyRisk, atr * 0.3) * tp2R
 sellTp1 = close - math.max(sellRisk, atr * 0.3) * tp1R
 sellTp2 = close - math.max(sellRisk, atr * 0.3) * tp2R
 
+if buySignal
+    strategy.close("S")
+    strategy.entry("L", strategy.long)
+    strategy.exit("L1", from_entry="L", qty_percent=50, stop=buySl, limit=buyTp1)
+    strategy.exit("L2", from_entry="L", stop=buySl, limit=buyTp2)
+if sellSignal
+    strategy.close("L")
+    strategy.entry("S", strategy.short)
+    strategy.exit("S1", from_entry="S", qty_percent=50, stop=sellSl, limit=sellTp1)
+    strategy.exit("S2", from_entry="S", stop=sellSl, limit=sellTp2)
+
 phase = buySignal ? "BUY" : sellSignal ? "SELL" : bias == 0 ? "NO IMPULSE" : not pulled ? "IMPULSE — wait pullback" : sessOk ? "PULLED — wait reject" : "OUT OF SESSION"
 why = buySignal or sellSignal ? "impulse + pullback reject" : not barstate.isconfirmed ? "bar OPEN" : not sessOk ? "session/killzone" : bias == 0 ? "need displacement + volume" : not pulled ? "do not chase — wait mean" : bias == -1 ? "need bearish close under 21 EMA" : "need bullish close over 21 EMA"
 
@@ -190,7 +197,7 @@ if showLevels and sellSignal
 
 var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(#0d1117, 8), border_width=1, border_color=color.new(#37474f, 0))
 if barstate.islast
-    table.cell(dash, 0, 0, modeName + " v5", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 0, 0, modeName + " v5 BT", text_color=color.white, text_size=size.normal)
     table.cell(dash, 1, 0, phase, text_color=buySignal ? color.new(#00e676, 0) : sellSignal ? color.new(#ff5252, 0) : color.silver, text_size=size.small)
     table.cell(dash, 0, 1, "Why", text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 1, why, text_color=color.silver, text_size=size.small)
