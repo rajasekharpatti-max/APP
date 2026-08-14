@@ -1,0 +1,13 @@
+{
+  "appId": "com.anushajewelry.shop",
+  "appName": "Anusha Jewelry",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}

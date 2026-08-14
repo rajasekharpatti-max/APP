@@ -1,0 +1,19 @@
+/* Phone layout for Play Store / Capacitor */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; padding-bottom: 72px; }
+  .side {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    height: auto; z-index: 10; display: flex; flex-direction: column;
+    padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
+    border-right: 0; border-top: 1px solid var(--line);
+  }
+  .brand { display: none; }
+  nav { display: flex; overflow-x: auto; gap: 4px; }
+  nav button { flex: 1; min-width: 72px; font-size: 11px; padding: 8px 4px; white-space: nowrap; }
+  .main { padding: 12px 12px 24px; }
+  .kpis { grid-template-columns: 1fr 1fr; }
+  .grid[style] { grid-template-columns: 1fr !important; }
+  table { font-size: 12px; }
+  .modal { width: 100%; }
+}
+body { -webkit-tap-highlight-color: transparent; }
