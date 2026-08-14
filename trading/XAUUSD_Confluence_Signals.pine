@@ -1,15 +1,23 @@
 //@version=5
-// AJ Flow v10 — panel is a SCREEN table (never off-chart). Legend shows FLOW + RVOL.
-// BUY/SELL on bar close: EMA flow + volume + EMA21 reject/cross. Not financial advice. Tiny size.
-strategy("AJ Flow v10", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=5, commission_type=strategy.commission.percent, commission_value=0.03, slippage=2, max_labels_count=500, max_lines_count=200)
+// AJ Flow v11 — cut the v10 death: 1-3 bar Gold wicks + countertrend longs.
+// Wider SL, delayed hard stop, HTF+VWAP must agree, trend spread, BE after TP1.
+// Not financial advice. Tiny size. Past GOLD test was -0.26% after fees.
+strategy("AJ Flow v11", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=5, commission_type=strategy.commission.percent, commission_value=0.03, slippage=2, max_labels_count=500, max_lines_count=200)
 
 emaF = input.int(21, "EMA fast")
 emaS = input.int(55, "EMA slow")
-rvolMin = input.float(1.0, "RVOL min", step=0.05)
+rvolMin = input.float(1.15, "RVOL min", step=0.05)
 needVol = input.bool(true, "Need volume TRUE")
-tp1R = input.float(1.5, "TP1 R", step=0.1)
-tp2R = input.float(2.0, "TP2 R", step=0.1)
-coolN = input.int(4, "Cooldown bars")
+useHtf = input.bool(true, "HTF must agree")
+useVwap = input.bool(true, "VWAP must agree")
+minSpread = input.float(0.12, "Min EMA spread (x ATR)", step=0.02)
+slAtr = input.float(0.85, "SL ATR", step=0.05)
+swingN = input.int(10, "SL swing bars")
+minHold = input.int(3, "Min bars before hard SL")
+wideAtr = input.float(1.50, "Hold-bar emergency SL (x ATR)", step=0.1)
+tp1R = input.float(2.0, "TP1 R", step=0.1)
+tp2R = input.float(3.0, "TP2 R", step=0.1)
+coolN = input.int(6, "Cooldown bars")
 paintBg = input.bool(false, "Paint background")
 
 htf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" ? "60" : "240"
@@ -18,6 +26,7 @@ e21 = ta.ema(close, emaF)
 e55 = ta.ema(close, emaS)
 vw = ta.vwap(hlc3)
 atr = ta.atr(14)
+atrMa = ta.sma(atr, 20)
 body = math.abs(close - open)
 
 volMa = ta.sma(volume, 20)
@@ -36,55 +45,99 @@ flowUp = close > e21 and e21 > e55
 flowDn = close < e21 and e21 < e55
 flowTxt = flowUp ? "BULLISH" : flowDn ? "BEARISH" : "CHOP"
 
+spreadOk = math.abs(e21 - e55) > atr * minSpread
+atrOk = atr > atrMa * 0.75 and atr < atrMa * 1.70
 climax = body > atr * 0.9
-rejUp = low <= e21 and close > e21 and close > open and body > atr * 0.2
-rejDn = high >= e21 and close < e21 and close < open and body > atr * 0.2
-xUp = ta.crossover(close, e21) and body > atr * 0.2
-xDn = ta.crossunder(close, e21) and body > atr * 0.2
+rejUp = low <= e21 and close > e21 and close > open and body > atr * 0.25
+rejDn = high >= e21 and close < e21 and close < open and body > atr * 0.25
+xUp = ta.crossover(close, e21) and body > atr * 0.25
+xDn = ta.crossunder(close, e21) and body > atr * 0.25
 
-buyRaw = flowUp and (not needVol or volBuy) and (rejUp or xUp) and not climax
-selRaw = flowDn and (not needVol or volSel) and (rejDn or xDn) and not climax
+buyRaw = flowUp and spreadOk and atrOk and (not needVol or volBuy) and (rejUp or xUp) and not climax and (not useHtf or htfUp) and (not useVwap or close > vw)
+selRaw = flowDn and spreadOk and atrOk and (not needVol or volSel) and (rejDn or xDn) and not climax and (not useHtf or not htfUp) and (not useVwap or close < vw)
 
 var int lastB = na
 okGap = na(lastB) or bar_index - lastB >= coolN
-buySig = barstate.isconfirmed and buyRaw and okGap
-selSig = barstate.isconfirmed and selRaw and okGap and not buySig
+flat = strategy.position_size == 0
+buySig = barstate.isconfirmed and buyRaw and okGap and (flat or strategy.position_size < 0)
+selSig = barstate.isconfirmed and selRaw and okGap and not buySig and (flat or strategy.position_size > 0)
 if buySig or selSig
     lastB := bar_index
 
-slL = math.min(ta.lowest(low, 5), close - atr * 0.35)
-slS = math.max(ta.highest(high, 5), close + atr * 0.35)
-tp1L = close + math.max(close - slL, atr * 0.3) * tp1R
-tp2L = close + math.max(close - slL, atr * 0.3) * tp2R
-tp1S = close - math.max(slS - close, atr * 0.3) * tp1R
-tp2S = close - math.max(slS - close, atr * 0.3) * tp2R
+slL = math.min(ta.lowest(low, swingN), close - atr * slAtr)
+slS = math.max(ta.highest(high, swingN), close + atr * slAtr)
+riskL = math.max(close - slL, atr * 0.5)
+riskS = math.max(slS - close, atr * 0.5)
+tp1L = close + riskL * tp1R
+tp2L = close + riskL * tp2R
+tp1S = close - riskS * tp1R
+tp2S = close - riskS * tp2R
+
+var float ePx = na
+var float origSl = na
+var float pSl = na
+var float pT1 = na
+var float pT2 = na
+var float eAtr = na
+var int entBar = na
 
 if buySig
     strategy.close("S")
     strategy.entry("L", strategy.long)
-    strategy.exit("L1", "L", qty_percent=50, stop=slL, limit=tp1L)
-    strategy.exit("L2", "L", stop=slL, limit=tp2L)
+    ePx := close
+    origSl := slL
+    pT1 := tp1L
+    pT2 := tp2L
+    eAtr := atr
+    entBar := bar_index
+    slNow = math.min(slL, close - atr * wideAtr)
+    pSl := slNow
+    strategy.exit("L1", "L", qty_percent=50, stop=slNow, limit=tp1L)
+    strategy.exit("L2", "L", stop=slNow, limit=tp2L)
 if selSig
     strategy.close("L")
     strategy.entry("S", strategy.short)
-    strategy.exit("S1", "S", qty_percent=50, stop=slS, limit=tp1S)
-    strategy.exit("S2", "S", stop=slS, limit=tp2S)
-
-var float pSl = na
-var float pT1 = na
-var float pT2 = na
-if buySig
-    pSl := slL
-    pT1 := tp1L
-    pT2 := tp2L
-if selSig
-    pSl := slS
+    ePx := close
+    origSl := slS
     pT1 := tp1S
     pT2 := tp2S
+    eAtr := atr
+    entBar := bar_index
+    slNow = math.max(slS, close + atr * wideAtr)
+    pSl := slNow
+    strategy.exit("S1", "S", qty_percent=50, stop=slNow, limit=tp1S)
+    strategy.exit("S2", "S", stop=slNow, limit=tp2S)
+
+held = na(entBar) ? 0 : bar_index - entBar
+hardOn = held >= minHold
+
+if strategy.position_size > 0 and not na(ePx) and not buySig
+    workSl = origSl
+    if close >= pT1
+        workSl := math.max(workSl, ePx)
+        origSl := workSl
+    slNow = hardOn ? workSl : math.min(workSl, ePx - eAtr * wideAtr)
+    pSl := slNow
+    strategy.exit("L1", "L", qty_percent=50, stop=slNow, limit=pT1)
+    strategy.exit("L2", "L", stop=slNow, limit=pT2)
+if strategy.position_size < 0 and not na(ePx) and not selSig
+    workSl = origSl
+    if close <= pT1
+        workSl := math.min(workSl, ePx)
+        origSl := workSl
+    slNow = hardOn ? workSl : math.max(workSl, ePx + eAtr * wideAtr)
+    pSl := slNow
+    strategy.exit("S1", "S", qty_percent=50, stop=slNow, limit=pT1)
+    strategy.exit("S2", "S", stop=slNow, limit=pT2)
+
 if strategy.position_size == 0 and not buySig and not selSig
     pSl := na
+    origSl := na
     pT1 := na
     pT2 := na
+    ePx := na
+    eAtr := na
+    entBar := na
 
 plot(e21, "EMA21", color.new(#00e5ff, 0), 2)
 plot(e55, "EMA55", color.new(#ffab00, 0), 2)
@@ -96,7 +149,7 @@ bgcolor(paintBg ? (flowUp ? color.new(#00c853, 88) : flowDn ? color.new(#ff1744,
 plotshape(buySig, title="BUY", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY", textcolor=color.white, size=size.normal)
 plotshape(selSig, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL", textcolor=color.white, size=size.normal)
 
-sig = buySig ? "BUY" : selSig ? "SELL" : flowDn and volSel ? "WAIT SELL" : flowUp and volBuy ? "WAIT BUY" : "NO SIGNAL"
+sig = buySig ? "BUY" : selSig ? "SELL" : flowUp and volBuy and not htfUp ? "WAIT HTF" : flowDn and volSel and htfUp ? "WAIT HTF" : flowDn and volSel ? "WAIT SELL" : flowUp and volBuy ? "WAIT BUY" : "NO SIGNAL"
 slTx = na(pSl) ? "-" : str.tostring(pSl, format.mintick)
 t1Tx = na(pT1) ? "-" : str.tostring(pT1, format.mintick)
 t2Tx = na(pT2) ? "-" : str.tostring(pT2, format.mintick)
@@ -104,7 +157,7 @@ t2Tx = na(pT2) ? "-" : str.tostring(pT2, format.mintick)
 hdr = buySig ? color.green : selSig ? color.red : flowDn ? color.new(#b71c1c, 0) : flowUp ? color.new(#1b5e20, 0) : color.new(#212121, 0)
 var table pan = table.new(position.top_right, 2, 8)
 if barstate.islast
-    table.cell(pan, 0, 0, "AJ v10", text_color=color.white, bgcolor=hdr)
+    table.cell(pan, 0, 0, "AJ v11", text_color=color.white, bgcolor=hdr)
     table.cell(pan, 1, 0, sig, text_color=color.white, bgcolor=hdr)
     table.cell(pan, 0, 1, "FLOW", text_color=color.white, bgcolor=color.black)
     table.cell(pan, 1, 1, flowTxt, text_color=color.white, bgcolor=color.black)
@@ -118,8 +171,8 @@ if barstate.islast
     table.cell(pan, 1, 5, close > vw ? "ABOVE" : "BELOW", text_color=color.white, bgcolor=color.black)
     table.cell(pan, 0, 6, "SL / TP1", text_color=color.white, bgcolor=color.black)
     table.cell(pan, 1, 6, slTx + " / " + t1Tx, text_color=color.white, bgcolor=color.black)
-    table.cell(pan, 0, 7, "TP2", text_color=color.white, bgcolor=color.black)
-    table.cell(pan, 1, 7, t2Tx, text_color=color.white, bgcolor=color.black)
+    table.cell(pan, 0, 7, "HOLD", text_color=color.white, bgcolor=color.black)
+    table.cell(pan, 1, 7, strategy.position_size == 0 ? "FLAT" : str.tostring(held) + "  TP2 " + t2Tx, text_color=color.white, bgcolor=color.black)
 
 alertcondition(buySig, "BUY", "BUY")
 alertcondition(selSig, "SELL", "SELL")
