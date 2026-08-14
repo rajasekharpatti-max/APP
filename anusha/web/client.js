@@ -7,7 +7,7 @@ const PAGES = [
   ["backup", "Backup"]
 ];
 
-let page = "dash";
+let page = location.hash.replace("#", "") || "dash";
 let dash = null;
 let q = "";
 
@@ -40,10 +40,16 @@ function nav() {
 async function loadDash() {
   dash = await api("/api/dashboard");
   $("shopName").textContent = dash.shop.name;
-  $("shopTag").textContent = dash.shop.addr + " · data file on this computer";
-  $("rates").innerHTML = ["g22", "g24", "silver"].map((k) =>
-    `<div class="chip"><span>${k === "g22" ? "22K" : k === "g24" ? "24K" : "Silver"}</span><b>${dash.rates[k] || "—"}</b></div>`
-  ).join("");
+  $("shopTag").textContent = (dash.shop.addr || "Nellore") + " · Gold · Silver · Diamond";
+  $("rates").innerHTML = [
+    ["g22", "Gold 22K"],
+    ["g24", "Gold 24K"],
+    ["silver", "Silver"]
+  ].map(([k, lab]) => {
+    const v = dash.rates[k];
+    const shown = v ? Number(v).toLocaleString("en-IN") : "—";
+    return `<div class="chip"><span>${lab}</span><b>₹ ${shown}</b></div>`;
+  }).join("");
 }
 
 async function render() {
@@ -59,28 +65,34 @@ async function render() {
 
 function viewDash() {
   $("view").innerHTML = `
+    <div class="page-title">Today at the counter</div>
     <div class="kpis">
       <div class="card"><div class="lbl">Customers</div><div class="val">${dash.counts.customers}</div></div>
       <div class="card"><div class="lbl">Orders</div><div class="val">${dash.counts.orders}</div></div>
       <div class="card"><div class="lbl">Khata due</div><div class="val due">${inr(dash.receivable)}</div></div>
-      <div class="card"><div class="lbl">Pending</div><div class="val">${dash.pending}</div></div>
+      <div class="card"><div class="lbl">Pending work</div><div class="val">${dash.pending}</div></div>
     </div>
-    <div class="card"><div class="lbl">Trust</div>
-      <p class="ok">SQLite shop file · ${esc(dash.db_path)}</p>
-      <p>${dash.integrity.ok ? '<span class="ok">Integrity OK</span>' : '<span class="due">Integrity fail</span>'}
-      · ${dash.integrity.customers} customers · ${dash.integrity.orders} orders</p>
-    </div>
-    <div class="card">
-      <div class="lbl">Due khata</div>
-      <table><thead><tr><th>Name</th><th>Phone</th><th>Due</th></tr></thead>
-      <tbody>${(dash.dues || []).map((d) => `<tr><td>${esc(d.name)}</td><td>${esc(d.phone)}</td><td class="due">${inr(d.bal)}</td></tr>`).join("")}</tbody>
-      </table>
+    <div class="split">
+      <div class="card">
+        <div class="lbl">Khata due — collect</div>
+        <table><thead><tr><th>Name</th><th>Phone</th><th>Due</th></tr></thead>
+        <tbody>${(dash.dues || []).map((d) => `<tr><td>${esc(d.name)}</td><td>${esc(d.phone)}</td><td class="due">${inr(d.bal)}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="lbl">Trust</div>
+        <p class="ok">Shop book saved on this computer</p>
+        <p>${dash.integrity.ok ? '<span class="ok">Integrity OK</span>' : '<span class="due">Integrity fail</span>'}
+        · ${dash.integrity.customers} customers · ${dash.integrity.orders} orders</p>
+        <p style="color:var(--muted);font-size:12px">Export JSON every night from Backup.</p>
+      </div>
     </div>`;
 }
 
 async function viewCustomers() {
   const rows = await api("/api/customers?q=" + encodeURIComponent(q));
   $("view").innerHTML = `
+    <div class="page-title">Customers</div>
     <div class="row"><input class="search" id="q" value="${esc(q)}" placeholder="Search name / phone">
       <button class="btn" id="addC">+ Customer</button></div>
     <div class="card"><table><thead><tr><th>Name</th><th>Phone</th><th>Address</th><th>Khata</th></tr></thead>
@@ -91,11 +103,12 @@ async function viewCustomers() {
 async function viewOrders() {
   const rows = await api("/api/orders?q=" + encodeURIComponent(q));
   $("view").innerHTML = `
-    <div class="row"><input class="search" id="q" value="${esc(q)}" placeholder="Search orders">
+    <div class="page-title">Orders</div>
+    <div class="row"><input class="search" id="q" value="${esc(q)}" placeholder="Search order / name / item">
       <button class="btn" id="addO">+ Order</button></div>
-    <div class="card"><table><thead><tr><th>No</th><th>Date</th><th>Customer</th><th>Item</th><th>Total</th><th></th></tr></thead>
+    <div class="card"><table><thead><tr><th>No</th><th>Date</th><th>Customer</th><th>Item</th><th>Total</th><th>Status</th></tr></thead>
     <tbody>${rows.map((o) => `<tr><td>${esc(o.order_no)}</td><td>${esc(o.date)}</td><td>${esc(o.customer)}</td>
-      <td>${esc(o.ornament)}</td><td>${inr(o.total)}</td><td><span class="pill">${esc(o.status)}</span></td></tr>`).join("")}</tbody></table></div>`;
+      <td>${esc(o.ornament)}</td><td>${inr(o.total)}</td><td><span class="pill ${esc(o.status)}">${esc(o.status)}</span></td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function viewLedger() {
@@ -133,7 +146,7 @@ function modalHtml(title, inner) {
 
 document.body.addEventListener("click", async (e) => {
   const p = e.target.closest("[data-p]");
-  if (p) { page = p.dataset.p; q = ""; $("modal").innerHTML = ""; render(); return; }
+  if (p) { page = p.dataset.p; location.hash = page; q = ""; $("modal").innerHTML = ""; render(); return; }
   if (e.target.id === "x") { $("modal").innerHTML = ""; return; }
   if (e.target.id === "addC") {
     modalHtml("New customer", `<div class="form">
@@ -197,4 +210,8 @@ document.body.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.id === "q") render();
 });
 
+window.addEventListener("hashchange", () => {
+  page = location.hash.replace("#", "") || "dash";
+  render();
+});
 render().catch((e) => toast(String(e)));
