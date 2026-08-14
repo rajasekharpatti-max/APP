@@ -1,0 +1,10 @@
+{
+  "name": "Anusha Jewelry",
+  "short_name": "Anusha",
+  "description": "Shop book for Anusha Jewelry, Nellore — customers, orders, khata, old gold.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1c160d",
+  "theme_color": "#1c160d",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+}
