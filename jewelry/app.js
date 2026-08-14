@@ -1,4 +1,6 @@
 const KEY = "anusha-jewelry-v1";
+const SNAP = "anusha-jewelry-snaps";
+const NEED = ["version","customers","orders","ledger","workers","suppliers","oldGold","goldrate","shopprofile"];
 const PAGES = [
   ["dash", "Dashboard"],
   ["customers", "Customers"],
@@ -6,10 +8,12 @@ const PAGES = [
   ["ledger", "Khata / Ledger"],
   ["oldgold", "Old Gold"],
   ["workers", "Karigar"],
+  ["metal", "Karigar metal"],
   ["suppliers", "Suppliers"],
+  ["supfine", "Supplier fine"],
   ["rates", "Gold Rate"],
   ["shop", "Shop"],
-  ["backup", "Backup"]
+  ["backup", "Backup / Trust"]
 ];
 
 let db = emptyDb();
@@ -37,6 +41,54 @@ function inr(v) {
 }
 function today() { return new Date().toISOString().slice(0, 10); }
 function cust(id) { return db.customers.find(c => c.id === id) || { name: "—", phone: "" }; }
+function worker(id) { return db.workers.find(w => w.id === id) || { name: id }; }
+function supplier(id) { return db.suppliers.find(s => s.id === id) || { name: id }; }
+
+function countsOf(d) {
+  return {
+    customers: (d.customers || []).length,
+    orders: (d.orders || []).length,
+    ledger: (d.ledger || []).length,
+    workers: (d.workers || []).length,
+    suppliers: (d.suppliers || []).length,
+    oldGold: (d.oldGold || []).length
+  };
+}
+
+function checksum(d) {
+  const s = JSON.stringify(d);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h, 33) ^ s.charCodeAt(i);
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function verifyBackup(d) {
+  const errors = [];
+  if (!d || typeof d !== "object") return { ok: false, errors: ["File is not JSON object"], summary: {} };
+  NEED.forEach(k => { if (!(k in d)) errors.push("Missing key: " + k); });
+  ["customers","orders","ledger"].forEach(k => {
+    if (d[k] && !Array.isArray(d[k])) errors.push(k + " must be a list");
+  });
+  (d.customers || []).forEach((c, i) => { if (!c.id || !c.name) errors.push("Customer " + (i + 1) + " missing id/name"); });
+  (d.orders || []).forEach((o, i) => { if (!o.id || !o.orderNo) errors.push("Order " + (i + 1) + " missing id/number"); });
+  const ids = new Set((d.customers || []).map(c => c.id));
+  const orphan = (d.orders || []).filter(o => o.customerId && !ids.has(o.customerId)).length;
+  if (orphan) errors.push(orphan + " orders point to missing customer");
+  const summary = { ...countsOf(d), version: d.version || "—", checksum: checksum(d) };
+  return { ok: errors.length === 0, errors, summary };
+}
+
+function readSnaps() {
+  try { return JSON.parse(localStorage.getItem(SNAP) || "[]"); } catch (e) { return []; }
+}
+function pushSnap(reason) {
+  try {
+    const snaps = readSnaps();
+    snaps.unshift({ at: new Date().toISOString(), reason, checksum: checksum(db), counts: countsOf(db), data: db });
+    localStorage.setItem(SNAP, JSON.stringify(snaps.slice(0, 3)));
+  } catch (e) { /* quota */ }
+}
+
 function save() {
   db.exportedOn = new Date().toISOString();
   localStorage.setItem(KEY, JSON.stringify(db));
@@ -146,8 +198,8 @@ function render() {
   $("shopMini").textContent = (db.shopprofile.name || "ANUSHA JEWELRY") + " · Nellore";
   const body = {
     dash: viewDash, customers: viewCustomers, orders: viewOrders, ledger: viewLedger,
-    oldgold: viewOldGold, workers: viewWorkers, suppliers: viewSuppliers,
-    rates: viewRates, shop: viewShop, backup: viewBackup
+    oldgold: viewOldGold, workers: viewWorkers, metal: viewMetal, suppliers: viewSuppliers,
+    supfine: viewSupFine, rates: viewRates, shop: viewShop, backup: viewBackup
   }[page];
   $("view").innerHTML = body();
   if (modal) $("modals").innerHTML = modal;
@@ -163,6 +215,9 @@ function viewDash() {
   const og = db.oldGold.reduce((s, o) => s + n(o.fineVal), 0);
   const recent = [...db.orders].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
   const dues = db.customers.map(c => ({ c, b: ledgerBal(c.id) })).filter(x => x.b > 1).sort((a, b) => b.b - a.b).slice(0, 8);
+  const v = verifyBackup(db);
+  const lastEx = localStorage.getItem(KEY + "-export") || "";
+  const stale = !lastEx || (Date.now() - Date.parse(lastEx) > 24 * 3600 * 1000);
   return `
     <div class="topbar">
       <div>
@@ -171,6 +226,14 @@ function viewDash() {
       </div>
       <div class="rates">
         ${rateChip("22K", r.g22)} ${rateChip("24K", r.g24)} ${rateChip("Silver", r.silver)}
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:12px;border-color:${v.ok ? "#2f5" : "#e05c5c"}">
+      <div class="lbl">Trust</div>
+      <div>${v.ok ? '<span class="ok">Backup structure OK</span>' : '<span class="due">Check backup</span>'}
+      · checksum <b>${v.summary.checksum}</b>
+      · ${v.summary.customers} customers · ${v.summary.orders} orders · ${v.summary.ledger} ledger
+      ${stale ? ' · <span class="due">Export a JSON backup today (Backup page)</span>' : " · last export saved"}
       </div>
     </div>
     <div class="grid kpis">
@@ -294,6 +357,57 @@ function viewWorkers() {
     </table></div>`;
 }
 
+function metalBal(wid) {
+  let issued = 0, ret = 0;
+  (db.wkmetal[wid] || []).forEach(x => {
+    issued += n(x.fineIssued);
+    ret += n(x.fineReturned) + n(x.consumed);
+  });
+  return { issued, ret, out: issued - ret };
+}
+
+function viewMetal() {
+  const rows = db.workers.map(w => {
+    const b = metalBal(w.id);
+    const nTx = (db.wkmetal[w.id] || []).length;
+    return `<tr><td>${esc(w.name)}</td><td>${b.issued.toFixed(3)}</td><td>${b.ret.toFixed(3)}</td>
+      <td class="${b.out > 0.01 ? "due" : "ok"}">${b.out.toFixed(3)} g</td>
+      <td>${nTx}</td>
+      <td><button class="ghost" data-metal="${w.id}">Issue / return</button></td></tr>`;
+  }).join("");
+  return `
+    <div class="topbar"><h2>Karigar metal</h2>
+      <button class="btn" id="addIssue">+ Issue metal</button></div>
+    <div class="card"><table>
+      <thead><tr><th>Karigar</th><th>Fine issued</th><th>Returned / used</th><th>Outstanding</th><th>Entries</th><th></th></tr></thead>
+      <tbody>${rows || emptyRow(6)}</tbody>
+    </table></div>`;
+}
+
+function fineBal(sid) {
+  let inn = 0, out = 0, cash = 0;
+  (db.supfine[sid] || []).forEach(x => {
+    inn += n(x.fineIn); out += n(x.fineOut); cash += n(x.cashPaid);
+  });
+  return { inn, out, net: inn - out, cash };
+}
+
+function viewSupFine() {
+  const rows = db.suppliers.map(s => {
+    const b = fineBal(s.id);
+    return `<tr><td>${esc(s.name)}</td><td>${b.out.toFixed(3)}</td><td>${b.inn.toFixed(3)}</td>
+      <td>${b.net.toFixed(3)}</td><td>${inr(b.cash)}</td>
+      <td>${(db.supfine[s.id] || []).length}</td></tr>`;
+  }).join("");
+  return `
+    <div class="topbar"><h2>Supplier fine book</h2></div>
+    <div class="card"><p class="muted">Fine out = metal you gave / paid as fine. Fine in = metal received. From your AJ-v7 supfine book.</p>
+    <table>
+      <thead><tr><th>Supplier</th><th>Fine out g</th><th>Fine in g</th><th>Net (in-out)</th><th>Cash paid</th><th>Tx</th></tr></thead>
+      <tbody>${rows || emptyRow(6)}</tbody>
+    </table></div>`;
+}
+
 function viewSuppliers() {
   return `
     <div class="topbar"><h2>Suppliers</h2><button class="btn" id="addSup">+ Supplier</button></div>
@@ -347,16 +461,33 @@ function viewShop() {
 }
 
 function viewBackup() {
+  const v = verifyBackup(db);
+  const snaps = readSnaps();
   return `
-    <div class="topbar"><h2>Backup</h2></div>
+    <div class="topbar"><h2>Backup / Trust</h2></div>
     <div class="card">
-      <p>This app stores data in this browser. Export often. Import your <b>AJ-v7-COMBINED</b> JSON (AnushaJewelry_Backup).</p>
+      <p>Shop data lives in this browser only. <b>Export JSON every day</b> onto your computer or pendrive. Import only AJ-v7-COMBINED files.</p>
+      <p>${v.ok ? '<span class="ok">Integrity OK</span>' : '<span class="due">Integrity issues</span>'}
+      · checksum <b>${v.summary.checksum}</b>
+      · ${v.summary.customers} customers · ${v.summary.orders} orders · ${v.summary.ledger} ledger
+      · version ${esc(v.summary.version)}</p>
+      ${v.errors.length ? `<ul class="due">${v.errors.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
       <div class="row">
         <button class="btn" id="exportBtn">Export backup JSON</button>
         <label class="btn ghost">Import JSON<input id="importFile" type="file" accept="application/json" class="hidden"></label>
-        <button class="ghost" id="loadSeed">Load 8 Aug 2026 shop backup</button>
+        <button class="ghost" id="loadSeed">Reload 8 Aug 2026 file</button>
+        <button class="ghost" id="verifyNow">Re-check integrity</button>
       </div>
-      <p class="muted">Last saved in file: ${esc(db.exportedOn || "—")} · ${db.customers.length} customers · ${db.orders.length} orders · ${db.ledger.length} ledger lines</p>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="lbl">Undo snapshots (last 3 imports)</div>
+      <table><thead><tr><th>When</th><th>Why</th><th>Checksum</th><th>Records</th><th></th></tr></thead>
+      <tbody>${snaps.map((s, i) => `<tr>
+        <td>${esc(s.at)}</td><td>${esc(s.reason)}</td><td>${esc(s.checksum)}</td>
+        <td>${s.counts.customers}/${s.counts.orders}/${s.counts.ledger}</td>
+        <td><button class="ghost" data-restore="${i}">Restore</button></td>
+      </tr>`).join("") || emptyRow(5)}</tbody></table>
+      <p class="muted">Restore brings back the shop book from just before an import. Then export again.</p>
     </div>`;
 }
 
@@ -478,6 +609,37 @@ function modalLed() {
   </div></div>`;
 }
 
+function modalIssue() {
+  const opts = db.workers.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
+  modal = `<div class="modal-bg"><div class="modal">
+    <div class="topbar"><h2>Issue / return metal</h2><button class="ghost" id="closeM">Close</button></div>
+    <div class="form">
+      <div class="field"><label>Karigar</label><select id="m_wid">${opts}</select></div>
+      <div class="field"><label>Mode</label><select id="m_mode"><option value="issue">Issue</option><option value="return">Return</option></select></div>
+      <div class="field"><label>Date</label><input id="m_date" type="date" value="${today()}"></div>
+      <div class="field"><label>Gross g</label><input id="m_gross"></div>
+      <div class="field"><label>Purity %</label><input id="m_pct" value="91.6"></div>
+      <div class="field"><label>Note</label><input id="m_desc" value=""></div>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="btn" id="saveMetal">Save metal entry</button></div>
+  </div></div>`;
+}
+
+function modalMetalBook(wid) {
+  const w = worker(wid);
+  const rows = (db.wkmetal[wid] || []).map(x => `<tr>
+    <td>${esc(x.date)}</td><td>${esc(x.mode)}</td><td>${esc(x.desc || x.note)}</td>
+    <td>${n(x.fineIssued).toFixed(3)}</td><td>${n(x.fineReturned || x.consumed).toFixed(3)}</td>
+  </tr>`).join("");
+  const b = metalBal(wid);
+  modal = `<div class="modal-bg"><div class="modal">
+    <div class="topbar"><h2>${esc(w.name)} metal</h2><button class="ghost" id="closeM">Close</button></div>
+    <p>Outstanding fine: <b>${b.out.toFixed(3)} g</b></p>
+    <table><thead><tr><th>Date</th><th>Mode</th><th>Note</th><th>Issued</th><th>Back</th></tr></thead>
+    <tbody>${rows || emptyRow(5)}</tbody></table>
+  </div></div>`;
+}
+
 function modalOg() {
   modal = `<div class="modal-bg"><div class="modal">
     <div class="topbar"><h2>Buy old gold</h2><button class="ghost" id="closeM">Close</button></div>
@@ -510,6 +672,8 @@ function printBill(id) {
     <div>${esc(c.name)} · ${esc(c.phone)}<br>${esc(c.address)}</div>
     <hr>
     <table>
+      <tr><td>HUID</td><td>${esc(o.huid || "—")}</td></tr>
+      <tr><td>GSTIN</td><td>${esc(db.shopprofile.gstin || "—")}</td></tr>
       <tr><td>Item</td><td>${esc(o.ornament)}</td></tr>
       <tr><td>Metal</td><td>${esc(o.metal)}</td></tr>
       <tr><td>Weight</td><td>${esc(o.weight)} g</td></tr>
@@ -544,6 +708,18 @@ function bind() {
     if (e.target.id === "addOrder") { modalOrder(null); render(); return; }
     if (e.target.id === "addLed") { modalLed(); render(); return; }
     if (e.target.id === "addOg") { modalOg(); render(); return; }
+    if (e.target.id === "addIssue") { modalIssue(); render(); return; }
+    const mb = e.target.closest("[data-metal]");
+    if (mb) { modalMetalBook(mb.dataset.metal); render(); return; }
+    const rst = e.target.closest("[data-restore]");
+    if (rst) {
+      const snaps = readSnaps();
+      const s = snaps[+rst.dataset.restore];
+      if (!s || !confirm("Restore shop book from " + s.at + "?")) return;
+      pushSnap("before-restore");
+      db = Object.assign(emptyDb(), s.data);
+      save(); closeModal(); page = "dash"; render(); toast("Restored snapshot"); return;
+    }
     if (e.target.id === "addWk") {
       const name = prompt("Karigar name"); if (!name) return;
       db.workers.push({ id: nid(), name, phone: "", workType: "Goldsmith", payType: "Per Piece", payAmount: "", joinDate: today(), notes: "", payments: [] });
@@ -585,6 +761,19 @@ function bind() {
       addLedger({ customerId: $("l_cid").value, entryType: $("l_type").value, side: $("l_side").value, amount: $("l_amt").value, note: $("l_note").value, date: $("l_date").value });
       save(); closeModal(); toast("Ledger saved"); return;
     }
+    if (e.target.id === "saveMetal") {
+      const wid = $("m_wid").value;
+      if (!wid) { toast("Select karigar"); return; }
+      const mode = $("m_mode").value;
+      const gross = n($("m_gross").value);
+      const pct = n($("m_pct").value);
+      const fine = gross * pct / 100;
+      if (!db.wkmetal[wid]) db.wkmetal[wid] = [];
+      const row = { id: nid(), date: $("m_date").value, note: $("m_desc").value, mode, desc: $("m_desc").value, grossWt: gross, purity: "Custom", purityPct: pct, fineIssued: mode === "issue" ? fine : 0, fineReturned: mode === "return" ? fine : 0, consumed: 0, orderRef: "", pieces: "", ornWt: "", size: "", length: "", mcType: "", mcValue: "" };
+      if (mode === "return") { row.retGross = gross; row.retNet = gross; }
+      db.wkmetal[wid].push(row);
+      save(); closeModal(); toast("Metal book updated"); return;
+    }
     if (e.target.id === "saveOg") {
       const gross = n($("og_gross").value), less = n($("og_less").value), pct = n($("og_pct").value), rate = n($("og_rate").value);
       const netWt = gross - less, fineWt = netWt * pct / 100, fineVal = fineWt * rate;
@@ -606,14 +795,20 @@ function bind() {
       save(); toast("Shop saved"); return;
     }
     if (e.target.id === "exportBtn") {
+      localStorage.setItem(KEY + "-export", new Date().toISOString());
       const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "AnushaJewelry_Backup_" + today() + ".json";
       a.click();
+      toast("Backup downloaded — keep this file");
       return;
     }
-    if (e.target.id === "loadSeed") { loadSeed(); return; }
+    if (e.target.id === "verifyNow") { render(); toast(verifyBackup(db).ok ? "Integrity OK" : "Integrity failed"); return; }
+    if (e.target.id === "loadSeed") {
+      if (!confirm("Reload 8 Aug 2026 backup? Current book is snapshotted first.")) return;
+      loadSeed(); return;
+    }
   };
   document.body.oninput = (e) => {
     if (e.target.id === "q") { q = e.target.value; render(); $("q").focus(); $("q").setSelectionRange(q.length, q.length); }
@@ -625,10 +820,13 @@ function bind() {
       rd.onload = () => {
         try {
           const data = JSON.parse(rd.result);
-          if (!data.customers || !data.orders) throw new Error("Not an AJ backup");
+          const v = verifyBackup(data);
+          if (!v.ok && !confirm("This file has problems:\n" + v.errors.join("\n") + "\nImport anyway?")) return;
+          if (db.customers.length) pushSnap("before-import");
           db = Object.assign(emptyDb(), data);
-          save(); modal = null; page = "dash"; render(); toast("Imported " + db.customers.length + " customers");
-        } catch (err) { toast("Import failed"); }
+          save(); modal = null; page = "dash"; render();
+          toast("Imported OK · " + v.summary.checksum);
+        } catch (err) { toast("Import failed — not valid JSON"); }
       };
       rd.readAsText(f);
     }
@@ -639,9 +837,13 @@ async function loadSeed() {
   try {
     const res = await fetch("data/AnushaJewelry_Backup.json");
     if (!res.ok) throw new Error("no seed");
-    db = Object.assign(emptyDb(), await res.json());
+    const data = await res.json();
+    const v = verifyBackup(data);
+    if (!v.ok) { toast("Seed file failed integrity"); return; }
+    if (db.customers.length) pushSnap("before-seed");
+    db = Object.assign(emptyDb(), data);
     save(); page = "dash"; modal = null; render();
-    toast("Loaded Anusha Jewelry backup");
+    toast("Loaded verified shop backup · " + v.summary.checksum);
   } catch (e) {
     toast("Open via local server, or use Import JSON");
   }

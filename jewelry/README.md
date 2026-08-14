@@ -26,6 +26,17 @@ First load imports `data/AnushaJewelry_Backup.json` (8 Aug 2026 shop file: 81 cu
 - **Gold rate** with history
 - **Backup** — export/import the same JSON format as the old AJ-v7 file
 
-Data stays in this browser (`localStorage`). Export a backup every day.
+Data stays in this browser (`localStorage`). **Export a backup every day** (Backup / Trust page). Import is checked against the AJ-v7 keys; the last 3 imports can be undone from snapshots.
+
+## Trust
+
+```bash
+node jewelry/verify.mjs
+```
+
+Checks the 8 Aug 2026 seed file: shop name, record counts, first bill maths, no orphan orders.
+
+Dashboard shows a checksum and warns if you have not exported JSON in 24 hours.
+
 
 This is shop records software, not trading signals.
