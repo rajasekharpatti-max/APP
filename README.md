@@ -1,11 +1,11 @@
 # APP
 
-**Anusha Jewelry** shop manager lives in [`jewelry/`](jewelry/README.md).
-
-Open:
+**Anusha Shop (new app)** — SQLite on this computer:
 
 ```bash
-cd jewelry && python3 -m http.server 8080
+python3 anusha/app.py
 ```
 
-Then http://localhost:8080
+http://127.0.0.1:5050
+
+Older browser-only copy remains in [`jewelry/`](jewelry/README.md).

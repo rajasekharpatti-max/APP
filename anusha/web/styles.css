@@ -1,0 +1,33 @@
+:root { --gold:#c9a227; --ink:#1c1408; --paper:#f7f1e4; --panel:#fffaf0; --line:#e2d4b0; --muted:#7a6a4e; --red:#b42318; --green:#1f7a4d; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Georgia", "Noto Serif", serif; background: var(--paper); color: var(--ink); }
+header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; padding: 18px 24px 10px; border-bottom: 3px solid var(--gold); background: #fff; }
+h1 { margin: 0; letter-spacing: .12em; font-size: 22px; color: #8a6a12; }
+header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+nav { display: flex; flex-wrap: wrap; gap: 6px; }
+nav button, .btn, button {
+  font-family: inherit; cursor: pointer; border: 1px solid var(--gold);
+  background: #fff; color: var(--ink); padding: 7px 11px; border-radius: 4px;
+}
+nav button.on, .btn { background: var(--gold); color: #1a1204; font-weight: 700; }
+.rates { display: flex; gap: 10px; padding: 12px 24px; flex-wrap: wrap; }
+.chip { background: var(--panel); border: 1px solid var(--line); padding: 8px 14px; min-width: 110px; }
+.chip b { display: block; font-size: 18px; }
+main { padding: 8px 24px 40px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); padding: 12px 14px; margin: 10px 0; }
+.card .lbl { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .06em; }
+.card .val { font-size: 22px; margin-top: 4px; }
+.due { color: var(--red); font-weight: 700; }
+.ok { color: var(--green); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input, select, textarea { font: inherit; padding: 7px 8px; border: 1px solid var(--line); background: #fff; }
+.search { min-width: 220px; flex: 1; }
+.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.modal-bg { position: fixed; inset: 0; background: rgba(28,20,8,.4); display: flex; justify-content: center; padding: 30px 12px; overflow: auto; }
+.modal { background: #fff; border: 2px solid var(--gold); padding: 16px; width: min(880px, 100%); }
+.toast { position: fixed; right: 16px; bottom: 16px; background: #1c1408; color: #f7f1e4; padding: 10px 12px; }
+.pill { padding: 2px 8px; border-radius: 99px; background: #efe4c8; font-size: 12px; }
+@media (max-width: 800px) { header { flex-direction: column; align-items: flex-start; } }
